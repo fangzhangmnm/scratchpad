@@ -21,11 +21,17 @@ import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
-// Apple Pencil 屏幕双击 = 切换 笔/橡皮 (barrel-tap 没法在 Web 拿到，退而求其次)
-const TAP_MAX_DURATION = 180;   // ms
-const TAP_MAX_MOVE = 8;          // 屏幕 px
-const DOUBLETAP_WINDOW = 400;    // ms
-const DOUBLETAP_MAX_GAP = 36;    // 屏幕 px
+// 屏幕双击 = 切换 笔/橡皮。pen 或 finger 都能触发 (mouse 走键盘 E)。
+// 容差按手指 contact 的不精确算 — 触屏指尖中心点可能漂 30-50px。
+const TAP_MAX_DURATION = 220;    // ms — 单次按下持续多久还算 tap
+const TAP_MAX_MOVE = 16;          // 屏幕 px — 单次 tap 期间允许的位移
+const DOUBLETAP_WINDOW = 500;     // ms — 两次 tap 间隔
+const DOUBLETAP_MAX_GAP = 80;     // 屏幕 px — 两次 tap 的位置容忍
+
+// 抗抖动：写笔画时的一阶指数平滑。α 越大越接近原始 (主要是写字，不能太糊)。
+// α=0.65 大概是：每一新 raw sample 占 65%，历史平滑值占 35%。
+// 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
+const STROKE_SMOOTH_ALPHA = 0.65;
 
 export class InputController {
   constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, status } = {}) {
@@ -46,7 +52,7 @@ export class InputController {
 
     this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
     this.redoStack = [];
-    this._lastPenTap = null;      // {time, x, y, stroke?}
+    this._lastTap = null;         // {time, x, y, stroke?} — pen 或 touch 都记
 
     this._bind();
   }
@@ -132,6 +138,7 @@ export class InputController {
     const rec = {
       pointerType: e.pointerType, role,
       x, y, startX: x, startY: y,
+      smX: x, smY: y,                  // 平滑后的屏幕坐标 (draw 用)
       downTime: performance.now(),
     };
     this.pointers.set(e.pointerId, rec);
@@ -162,12 +169,14 @@ export class InputController {
     }
 
     if (rec.role === "draw") {
-      // 用 coalesced events 拿到所有亚帧采样 → 笔迹平滑
+      // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
       const list = (events && events.length) ? events : [e];
       const enabled = this.getPressureEnabled();
       for (const ev of list) {
-        const { x: wx, y: wy } = this.board.screenToWorld(ev.clientX, ev.clientY);
+        rec.smX += STROKE_SMOOTH_ALPHA * (ev.clientX - rec.smX);
+        rec.smY += STROKE_SMOOTH_ALPHA * (ev.clientY - rec.smY);
+        const { x: wx, y: wy } = this.board.screenToWorld(rec.smX, rec.smY);
         const pressure = effectivePressure(ev, enabled);
         this.board.extendStroke(e.pointerId, wx, wy, pressure);
       }
@@ -197,22 +206,27 @@ export class InputController {
       return;
     }
 
-    // pen 双击 → 切换工具 (吃掉两笔)
-    let isPenTap = false;
-    if (e.pointerType === "pen" && !cancelled && rec.downTime) {
+    // 屏幕双击 → 切换工具。pen / touch 都收，mouse 走键盘。
+    // gesture / ignore (掌触) 不参与 — 多指 / 掌跟随不该被误判成 tap。
+    let isTap = false;
+    const tapEligible = !cancelled && rec.downTime &&
+      (e.pointerType === "pen" || e.pointerType === "touch") &&
+      rec.role !== "gesture" && rec.role !== "ignore";
+    if (tapEligible) {
       const now = performance.now();
       const dur = now - rec.downTime;
       const dist = Math.hypot(rec.x - rec.startX, rec.y - rec.startY);
-      isPenTap = dur < TAP_MAX_DURATION && dist < TAP_MAX_MOVE;
-      if (isPenTap) {
-        const lt = this._lastPenTap;
+      isTap = dur < TAP_MAX_DURATION && dist < TAP_MAX_MOVE;
+      if (isTap) {
+        const lt = this._lastTap;
         const isDouble = lt && (now - lt.time) < DOUBLETAP_WINDOW &&
           Math.hypot(rec.startX - lt.x, rec.startY - lt.y) < DOUBLETAP_MAX_GAP;
         if (isDouble) {
-          // 取消当前 stroke (还没 endStroke)
+          // 取消当前 stroke (还没 endStroke 的情况)
           if (rec.role === "draw") this.board.cancelStroke(e.pointerId);
           else if (rec.role === "erase") this.eraseSession = null;
-          // 撤销上一笔 tap：从 board / db / undo stack 都拔掉
+          // pan 角色无 stroke 可撤
+          // 撤销上一笔 tap (如果是 draw 留下来的点)
           if (lt.stroke) {
             this.board.strokes = this.board.strokes.filter((x) => x !== lt.stroke);
             this.board.requestRender();
@@ -220,14 +234,14 @@ export class InputController {
             const ui = this.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke));
             if (ui >= 0) { this.undoStack.splice(ui, 1); this._emitHistChange(); }
           }
-          this._lastPenTap = null;
+          this._lastTap = null;
           window.dispatchEvent(new CustomEvent("sp:doubletap"));
           this.onChange();
           return;
         }
-        this._lastPenTap = { time: now, x: rec.startX, y: rec.startY, stroke: null };
+        this._lastTap = { time: now, x: rec.startX, y: rec.startY, stroke: null };
       } else {
-        this._lastPenTap = null;
+        this._lastTap = null;
       }
     }
 
@@ -237,7 +251,7 @@ export class InputController {
       } else {
         const s = this.board.endStroke(e.pointerId);
         if (s) {
-          if (isPenTap && this._lastPenTap) this._lastPenTap.stroke = s;
+          if (isTap && this._lastTap) this._lastTap.stroke = s;
           addStroke(s).then(() => {
             this._pushUndo({ type: "add", strokes: [s] });
             this.onChange();
