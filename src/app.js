@@ -3,7 +3,10 @@
 import { Board, GRID_MODES } from "./board.js";
 import { InputController } from "./input.js";
 import { loadAllStrokes, clearAll, setMeta, getMeta } from "./db.js";
-import { exportPngCurrentView, exportPngAll, exportPdfAll } from "./export.js";
+import {
+  exportPngCurrentView, exportPngAll, exportPdfAll,
+  copyPngCurrentView, sharePngAll, isShareSupported,
+} from "./export.js";
 
 const THEMES = ["auto", "day", "night"];
 const THEME_LABEL = { auto: "跟随系统", day: "日", night: "夜" };
@@ -22,9 +25,11 @@ const els = {
   exportBtn: document.getElementById("exportButton"),
   clearBtn: document.getElementById("clearButton"),
   themeBtn: document.getElementById("themeButton"),
+  pressureBtn: document.getElementById("pressureButton"),
   toolBtns: [...document.querySelectorAll(".tool[data-tool]")],
   swatches: [...document.querySelectorAll(".swatch[data-color]")],
   exportSheet: document.getElementById("exportSheet"),
+  shareAllBtn: document.getElementById("shareAllBtn"),
   exportBackdrop: document.getElementById("exportBackdrop"),
   clearSheet: document.getElementById("clearSheet"),
   clearBackdrop: document.getElementById("clearBackdrop"),
@@ -37,6 +42,7 @@ const state = {
   tool: "pen",
   color: "ink",
   width: 2.2,
+  pressureEnabled: localStorage.getItem("scratchpad.pressure") === "1",
 };
 
 const board = new Board(els.board);
@@ -101,6 +107,20 @@ els.widthSlider.addEventListener("input", () => {
 });
 state.width = parseFloat(els.widthSlider.value);
 
+// 压感开关 — 默认关
+function applyPressure(on) {
+  state.pressureEnabled = !!on;
+  board.setPressureEnabled(state.pressureEnabled);
+  els.pressureBtn.setAttribute("aria-pressed", state.pressureEnabled ? "true" : "false");
+  els.pressureBtn.title = `压感（${state.pressureEnabled ? "开" : "关"}）`;
+  localStorage.setItem("scratchpad.pressure", state.pressureEnabled ? "1" : "0");
+}
+els.pressureBtn.addEventListener("click", () => {
+  applyPressure(!state.pressureEnabled);
+  setStatus(`压感 · ${state.pressureEnabled ? "开" : "关"}`);
+});
+applyPressure(state.pressureEnabled);
+
 // Undo/Redo
 els.undoBtn.addEventListener("click", () => input.undo());
 els.redoBtn.addEventListener("click", () => input.redo());
@@ -137,7 +157,10 @@ function closeSheet(sheet, backdrop) {
   backdrop.classList.add("hidden");
   sheet.classList.add("hidden");
 }
-els.exportBtn.addEventListener("click", () => openSheet(els.exportSheet, els.exportBackdrop));
+els.exportBtn.addEventListener("click", () => {
+  els.shareAllBtn.hidden = !isShareSupported();
+  openSheet(els.exportSheet, els.exportBackdrop);
+});
 els.exportBackdrop.addEventListener("click", () => closeSheet(els.exportSheet, els.exportBackdrop));
 els.exportSheet.addEventListener("click", async (e) => {
   const action = e.target.closest("[data-export]")?.dataset.export;
@@ -147,13 +170,30 @@ els.exportSheet.addEventListener("click", async (e) => {
   setStatus("导出中…");
   try {
     const stamp = stampStr();
-    if (action === "png-view") await exportPngCurrentView(board, `scratchpad-${stamp}.png`);
-    else if (action === "png-all") await exportPngAll(board, `scratchpad-${stamp}.png`);
-    else if (action === "pdf-all") await exportPdfAll(board, `scratchpad-${stamp}.pdf`);
-    setStatus("导出完成");
+    if (action === "copy-view") {
+      await copyPngCurrentView(board);
+      setStatus("已复制到剪贴板");
+    } else if (action === "share-all") {
+      await sharePngAll(board, `scratchpad-${stamp}.png`);
+      setStatus("已分享");
+    } else if (action === "png-view") {
+      await exportPngCurrentView(board, `scratchpad-${stamp}.png`);
+      setStatus("导出完成");
+    } else if (action === "png-all") {
+      await exportPngAll(board, `scratchpad-${stamp}.png`);
+      setStatus("导出完成");
+    } else if (action === "pdf-all") {
+      await exportPdfAll(board, `scratchpad-${stamp}.pdf`);
+      setStatus("导出完成");
+    }
   } catch (err) {
-    console.error("export failed", err);
-    setStatus("导出失败");
+    // 用户取消分享 / 复制失败 / 没东西可导出
+    if (err && err.name === "AbortError") {
+      setStatus("已取消");
+    } else {
+      console.error("export failed", err);
+      setStatus(err?.message?.includes("空") ? "没东西可导出" : "导出失败");
+    }
   }
 });
 

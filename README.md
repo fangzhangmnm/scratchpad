@@ -19,7 +19,8 @@
 - ✅ IndexedDB 持久化 — 重开即恢复
 - ✅ 阅后即焚（一键清空，二级确认）
 - ✅ Undo / Redo（含擦除）
-- ✅ 导出：PNG 当前视图 / PNG 全部内容 / PDF 全部内容
+- ✅ 导出 / 分享：复制 PNG 到剪贴板 / `navigator.share` 走系统分享面板（AirDrop / 微信文件传输助手等）/ 下载 PNG·当前视图 / 下载 PNG·全部 / 下载 PDF·全部
+- ✅ 压感开关（默认**关** — 关时单条 Path2D 描边，浏览器原生抗锯齿，最干净；开时变宽丝带）
 - ✅ 日 / 夜 / 跟随系统 三档主题
 - ✅ PWA：所有依赖 vendored 本地，service worker 装包，飞机模式可用
 - ✅ 新版本检测（同源 ETag 变 → 弹 toast，用户点了再 reload）

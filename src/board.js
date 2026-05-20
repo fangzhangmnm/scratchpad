@@ -22,6 +22,7 @@ export class Board {
     this.liveStrokes = new Map();       // pointerId → 正在画的 stroke (未入库)
     this.viewport = { tx: 0, ty: 0, scale: 1 };
     this.gridMode = "dots";
+    this.pressureEnabled = false;
     this.minScale = 0.1;
     this.maxScale = 8;
     this._raf = null;
@@ -260,8 +261,13 @@ export class Board {
     ];
   }
 
+  setPressureEnabled(v) {
+    this.pressureEnabled = !!v;
+    this.requestRender();
+  }
+
   _drawStroke(s) {
-    drawStroke(this.ctx, s, this.viewport, this._inkColor);
+    drawStroke(this.ctx, s, this.viewport, this._inkColor, this.pressureEnabled);
   }
 
   _drawGrid() {
@@ -327,14 +333,16 @@ export class Board {
   }
 }
 
-// ---- 渲染：变宽填充丝带 (避免 per-segment stroke 的狗牙) ----
+// ---- 渲染 ----
 //
-// 对每个 sample 算出垂直当前切线的两个偏移点 (left/right side)，
-// 再用 quadraticCurveTo 沿 midpoint 走平滑曲线，两头各一个圆 cap 覆盖缝。
+// pressureEnabled = false (默认): 单条 Path2D 描边 + quadratic 中点平滑。
+//   完全靠浏览器原生抗锯齿，最干净。线宽固定。
 //
-// 压感→宽度: (0.3 + 0.7 * p^0.6) — 低压更敏感、动态范围更大 (≈3.3x)。
+// pressureEnabled = true: 变宽填充丝带 — 对每个 sample 算左右偏移点，
+//   沿两侧 quadraticCurveTo 走中点，两头圆 cap 盖缝。
+//   压感→宽度: (0.3 + 0.7 * p^0.6) — 低压更敏感，动态范围 ≈3.3x。
 
-export function drawStroke(ctx, s, viewport, inkColor) {
+export function drawStroke(ctx, s, viewport, inkColor, pressureEnabled = false) {
   const { tx, ty, scale } = viewport;
   const color = s.color === "ink" ? inkColor : s.color;
   const p = s.points;
@@ -342,16 +350,42 @@ export function drawStroke(ctx, s, viewport, inkColor) {
   if (N === 0) return;
 
   ctx.fillStyle = color;
+  ctx.strokeStyle = color;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // 屏幕坐标 + 半宽
+  // 屏幕坐标
   const sx = new Float64Array(N);
   const sy = new Float64Array(N);
-  const hw = new Float64Array(N);
   for (let i = 0; i < N; i++) {
     sx[i] = p[i*3]   * scale + tx;
     sy[i] = p[i*3+1] * scale + ty;
+  }
+
+  if (!pressureEnabled) {
+    const lw = Math.max(0.5, s.width * scale);
+    if (N === 1) {
+      ctx.beginPath();
+      ctx.arc(sx[0], sy[0], lw * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(sx[0], sy[0]);
+    for (let i = 1; i < N - 1; i++) {
+      const mx = (sx[i] + sx[i+1]) * 0.5;
+      const my = (sy[i] + sy[i+1]) * 0.5;
+      ctx.quadraticCurveTo(sx[i], sy[i], mx, my);
+    }
+    ctx.lineTo(sx[N-1], sy[N-1]);
+    ctx.stroke();
+    return;
+  }
+
+  // 压感模式：变宽丝带
+  const hw = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
     const pr = Math.max(0.05, Math.min(1, p[i*3+2]));
     hw[i] = Math.max(0.25, s.width * (0.3 + 0.7 * Math.pow(pr, 0.6)) * scale * 0.5);
   }
@@ -363,7 +397,6 @@ export function drawStroke(ctx, s, viewport, inkColor) {
     return;
   }
 
-  // 单点退化：第一个 / 最后一个点的法线用相邻段；中间点用前后段平均
   const lx = new Float64Array(N), ly = new Float64Array(N);
   const rx = new Float64Array(N), ry = new Float64Array(N);
   for (let i = 0; i < N; i++) {
@@ -372,7 +405,6 @@ export function drawStroke(ctx, s, viewport, inkColor) {
     else if (i === N - 1) { dxT = sx[N-1] - sx[N-2]; dyT = sy[N-1] - sy[N-2]; }
     else { dxT = sx[i+1] - sx[i-1]; dyT = sy[i+1] - sy[i-1]; }
     const len = Math.hypot(dxT, dyT) || 1;
-    // 法线: (-dy, dx) / len
     const nx = -dyT / len, ny = dxT / len;
     lx[i] = sx[i] + nx * hw[i];
     ly[i] = sy[i] + ny * hw[i];
@@ -381,7 +413,6 @@ export function drawStroke(ctx, s, viewport, inkColor) {
   }
 
   ctx.beginPath();
-  // 左侧: 起点 → 中段用 quadratic 过中点 → 终点
   ctx.moveTo(lx[0], ly[0]);
   for (let i = 1; i < N - 1; i++) {
     const mx = (lx[i] + lx[i+1]) * 0.5;
@@ -389,9 +420,7 @@ export function drawStroke(ctx, s, viewport, inkColor) {
     ctx.quadraticCurveTo(lx[i], ly[i], mx, my);
   }
   ctx.lineTo(lx[N-1], ly[N-1]);
-  // 跨过终点到右侧
   ctx.lineTo(rx[N-1], ry[N-1]);
-  // 右侧反向回起点
   for (let i = N - 2; i > 0; i--) {
     const mx = (rx[i] + rx[i-1]) * 0.5;
     const my = (ry[i] + ry[i-1]) * 0.5;
@@ -401,7 +430,6 @@ export function drawStroke(ctx, s, viewport, inkColor) {
   ctx.closePath();
   ctx.fill();
 
-  // 圆 cap 盖住接缝
   ctx.beginPath();
   ctx.arc(sx[0],   sy[0],   hw[0],   0, Math.PI * 2);
   ctx.fill();

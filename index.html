@@ -67,6 +67,12 @@
         <input id="widthSlider" type="range" min="1" max="12" step="0.5" value="2.2" aria-label="笔粗" />
       </label>
 
+      <button class="tool" id="pressureButton" type="button" title="压感（默认关）" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 17 C 6 17, 9 7, 12 7 C 15 7, 18 17, 21 17"></path>
+        </svg>
+      </button>
+
       <div class="spacer"></div>
 
       <button class="tool" id="undoButton" type="button" title="撤销 (Ctrl+Z)">
@@ -136,10 +142,12 @@
     <!-- Export sheet -->
     <div id="exportBackdrop" class="backdrop hidden" aria-hidden="true"></div>
     <div id="exportSheet" class="sheet hidden" role="dialog" aria-label="导出">
-      <h3>导出</h3>
-      <button class="sheet-action" data-export="png-view">PNG · 当前视图</button>
-      <button class="sheet-action" data-export="png-all">PNG · 全部内容</button>
-      <button class="sheet-action" data-export="pdf-all">PDF · 全部内容</button>
+      <h3>导出 / 分享</h3>
+      <button class="sheet-action" data-export="copy-view">复制 PNG · 当前视图（→剪贴板）</button>
+      <button class="sheet-action" data-export="share-all" id="shareAllBtn" hidden>分享 PNG · 全部内容</button>
+      <button class="sheet-action" data-export="png-view">下载 PNG · 当前视图</button>
+      <button class="sheet-action" data-export="png-all">下载 PNG · 全部内容</button>
+      <button class="sheet-action" data-export="pdf-all">下载 PDF · 全部内容</button>
       <button class="sheet-action ghost" data-export="cancel">取消</button>
     </div>
 
