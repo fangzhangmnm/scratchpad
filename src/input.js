@@ -28,13 +28,14 @@ const DOUBLETAP_WINDOW = 400;    // ms
 const DOUBLETAP_MAX_GAP = 36;    // 屏幕 px
 
 export class InputController {
-  constructor(board, { onChange, getTool, getColor, getWidth, status } = {}) {
+  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, status } = {}) {
     this.board = board;
     this.canvas = board.canvas;
     this.onChange = onChange || (() => {});
     this.getTool = getTool || (() => "pen");
     this.getColor = getColor || (() => "ink");
     this.getWidth = getWidth || (() => 2.2);
+    this.getPressureEnabled = getPressureEnabled || (() => false);
     this.status = status || (() => {});
 
     this.pointers = new Map();    // pointerId → {pointerType, role, x, y, pressure, startX, startY}
@@ -137,7 +138,7 @@ export class InputController {
 
     if (role === "draw") {
       const { x: wx, y: wy } = this.board.screenToWorld(x, y);
-      const pressure = effectivePressure(e);
+      const pressure = effectivePressure(e, this.getPressureEnabled());
       this.board.beginStroke(e.pointerId, this.getColor(), this.getWidth(), wx, wy, pressure);
     } else if (role === "erase") {
       this._beginErase();
@@ -164,9 +165,10 @@ export class InputController {
       // 用 coalesced events 拿到所有亚帧采样 → 笔迹平滑
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
       const list = (events && events.length) ? events : [e];
+      const enabled = this.getPressureEnabled();
       for (const ev of list) {
         const { x: wx, y: wy } = this.board.screenToWorld(ev.clientX, ev.clientY);
-        const pressure = effectivePressure(ev);
+        const pressure = effectivePressure(ev, enabled);
         this.board.extendStroke(e.pointerId, wx, wy, pressure);
       }
     } else if (rec.role === "erase") {
@@ -447,11 +449,11 @@ export class InputController {
   }
 }
 
-function effectivePressure(e) {
-  // 鼠标 / 不支持压感 → pressure 是 0.5 (W3C 默认)，给点变化感
-  if (e.pointerType === "mouse") return 0.5;
-  // Pencil: pressure 范围 (0,1)。0 表示传感器没数据 (按 → 抬瞬间)
+function effectivePressure(e, enabled) {
+  // 压感关 → 一律 1.0 (满压感)，渲染层会自动走 uniform 单 path 描边
+  if (!enabled) return 1;
+  if (e.pointerType === "mouse") return 0.5; // 鼠标没有传感器
   const p = typeof e.pressure === "number" ? e.pressure : 0.5;
-  if (p === 0) return 0.5;
+  if (p === 0) return 0.5;                   // 起 / 收笔瞬间传感器返 0
   return Math.max(0.05, Math.min(1, p));
 }

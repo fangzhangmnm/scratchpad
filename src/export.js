@@ -154,7 +154,7 @@ function renderOffscreen(board, ctx, opts) {
   ctx.fillRect(0, 0, width, height);
   const viewport = { tx, ty, scale };
   for (const s of board.strokes) {
-    drawStroke(ctx, s, viewport, board._inkColor, board.pressureEnabled);
+    drawStroke(ctx, s, viewport, board._inkColor);
   }
 }
 

@@ -22,7 +22,6 @@ export class Board {
     this.liveStrokes = new Map();       // pointerId → 正在画的 stroke (未入库)
     this.viewport = { tx: 0, ty: 0, scale: 1 };
     this.gridMode = "dots";
-    this.pressureEnabled = false;
     this.minScale = 0.1;
     this.maxScale = 8;
     this._raf = null;
@@ -261,13 +260,8 @@ export class Board {
     ];
   }
 
-  setPressureEnabled(v) {
-    this.pressureEnabled = !!v;
-    this.requestRender();
-  }
-
   _drawStroke(s) {
-    drawStroke(this.ctx, s, this.viewport, this._inkColor, this.pressureEnabled);
+    drawStroke(this.ctx, s, this.viewport, this._inkColor);
   }
 
   _drawGrid() {
@@ -335,14 +329,15 @@ export class Board {
 
 // ---- 渲染 ----
 //
-// pressureEnabled = false (默认): 单条 Path2D 描边 + quadratic 中点平滑。
-//   完全靠浏览器原生抗锯齿，最干净。线宽固定。
+// 自动按存的压感数据选路径：
+//   uniform (所有 pressure 都 = 1)  → 单条 Path2D 描边 + quadratic 中点平滑
+//                                    完全靠浏览器原生 stroke 抗锯齿，最干净
+//   variable (有变化)               → 变宽填充丝带 (左右偏移点 + quadratic + 两头圆 cap)
+//                                    压感→宽度: (0.3 + 0.7 * p^0.6)，动态范围 ≈3.3x
 //
-// pressureEnabled = true: 变宽填充丝带 — 对每个 sample 算左右偏移点，
-//   沿两侧 quadraticCurveTo 走中点，两头圆 cap 盖缝。
-//   压感→宽度: (0.3 + 0.7 * p^0.6) — 低压更敏感，动态范围 ≈3.3x。
+// 压感开关 = 数据层 (写新笔画时 pressure=1)，不是渲染层。
 
-export function drawStroke(ctx, s, viewport, inkColor, pressureEnabled = false) {
+export function drawStroke(ctx, s, viewport, inkColor) {
   const { tx, ty, scale } = viewport;
   const color = s.color === "ink" ? inkColor : s.color;
   const p = s.points;
@@ -357,12 +352,14 @@ export function drawStroke(ctx, s, viewport, inkColor, pressureEnabled = false) 
   // 屏幕坐标
   const sx = new Float64Array(N);
   const sy = new Float64Array(N);
+  let uniform = true;
   for (let i = 0; i < N; i++) {
     sx[i] = p[i*3]   * scale + tx;
     sy[i] = p[i*3+1] * scale + ty;
+    if (p[i*3+2] !== 1) uniform = false;
   }
 
-  if (!pressureEnabled) {
+  if (uniform) {
     const lw = Math.max(0.5, s.width * scale);
     if (N === 1) {
       ctx.beginPath();

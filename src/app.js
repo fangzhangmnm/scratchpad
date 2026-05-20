@@ -111,10 +111,9 @@ els.widthSlider.addEventListener("input", () => {
 });
 state.width = parseFloat(els.widthSlider.value);
 
-// 压感开关 — 默认关
+// 压感开关 — 默认关。只影响 *新* 笔画的写入 (off 时 pressure=1)，老笔画不变。
 function applyPressure(on) {
   state.pressureEnabled = !!on;
-  board.setPressureEnabled(state.pressureEnabled);
   if (els.pressureBtn) {
     els.pressureBtn.setAttribute("aria-pressed", state.pressureEnabled ? "true" : "false");
     els.pressureBtn.title = `压感（${state.pressureEnabled ? "开" : "关"}）`;
@@ -250,6 +249,7 @@ const input = new InputController(board, {
   getTool: () => state.tool,
   getColor: () => state.color,
   getWidth: () => state.width,
+  getPressureEnabled: () => state.pressureEnabled,
   onChange: () => {},
   status: setStatus,
 });
