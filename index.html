@@ -14,6 +14,30 @@
           }
         } catch (_) {}
       })();
+      // iPad 没 devtools — 任何脚本错误顶上糊一条红条，方便远程诊断
+      (function () {
+        function show(text) {
+          var bar = document.getElementById("__errBar");
+          if (!bar) {
+            bar = document.createElement("div");
+            bar.id = "__errBar";
+            bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;padding:8px 12px;background:#c0392b;color:#fff;font:13px/1.4 system-ui;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto";
+            bar.addEventListener("click", function () { bar.remove(); });
+            (document.body || document.documentElement).appendChild(bar);
+          }
+          bar.textContent = "⚠ " + text + "  (点击关闭)";
+        }
+        window.__sp_showFatal = show;
+        window.addEventListener("error", function (e) {
+          var m = (e && e.message) || (e && e.error && (e.error.message || String(e.error))) || "脚本错误";
+          var src = e && e.filename ? " (" + e.filename.split("/").pop() + ":" + e.lineno + ")" : "";
+          show(m + src);
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e && e.reason;
+          show((r && r.message) || String(r || "promise rejection"));
+        });
+      })();
     </script>
     <meta name="color-scheme" content="light dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

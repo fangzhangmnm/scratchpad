@@ -4,7 +4,7 @@
 // ScratchPad 是纯本地，没有任何运行时跨源请求 — vendor 也在仓库里。
 // 所以 SW 只关心同源即可。
 
-const CACHE_VERSION = "v3-2026-05-20";
+const CACHE_VERSION = "v4-2026-05-20";
 const CACHE_NAME = `scratchpad-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [

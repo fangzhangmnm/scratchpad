@@ -38,11 +38,15 @@ const els = {
   updateDismiss: document.getElementById("updateToastDismiss"),
 };
 
+function safeLS(key, fallback) {
+  try { return localStorage.getItem(key); } catch { return fallback; }
+}
+
 const state = {
   tool: "pen",
   color: "ink",
   width: 2.2,
-  pressureEnabled: localStorage.getItem("scratchpad.pressure") === "1",
+  pressureEnabled: safeLS("scratchpad.pressure") === "1",
 };
 
 const board = new Board(els.board);
@@ -111,11 +115,13 @@ state.width = parseFloat(els.widthSlider.value);
 function applyPressure(on) {
   state.pressureEnabled = !!on;
   board.setPressureEnabled(state.pressureEnabled);
-  els.pressureBtn.setAttribute("aria-pressed", state.pressureEnabled ? "true" : "false");
-  els.pressureBtn.title = `压感（${state.pressureEnabled ? "开" : "关"}）`;
-  localStorage.setItem("scratchpad.pressure", state.pressureEnabled ? "1" : "0");
+  if (els.pressureBtn) {
+    els.pressureBtn.setAttribute("aria-pressed", state.pressureEnabled ? "true" : "false");
+    els.pressureBtn.title = `压感（${state.pressureEnabled ? "开" : "关"}）`;
+  }
+  try { localStorage.setItem("scratchpad.pressure", state.pressureEnabled ? "1" : "0"); } catch {}
 }
-els.pressureBtn.addEventListener("click", () => {
+els.pressureBtn?.addEventListener("click", () => {
   applyPressure(!state.pressureEnabled);
   setStatus(`压感 · ${state.pressureEnabled ? "开" : "关"}`);
 });
@@ -158,7 +164,7 @@ function closeSheet(sheet, backdrop) {
   sheet.classList.add("hidden");
 }
 els.exportBtn.addEventListener("click", () => {
-  els.shareAllBtn.hidden = !isShareSupported();
+  if (els.shareAllBtn) els.shareAllBtn.hidden = !isShareSupported();
   openSheet(els.exportSheet, els.exportBackdrop);
 });
 els.exportBackdrop.addEventListener("click", () => closeSheet(els.exportSheet, els.exportBackdrop));
