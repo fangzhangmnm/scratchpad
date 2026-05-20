@@ -13,6 +13,8 @@
 - ✅ 矢量笔画（Float32 点列 + 压感 → 变宽）
 - ✅ Pointer Events 统一处理 pen / touch / mouse
 - ✅ Apple Pencil 防误触（设备一旦见过 pen，touch 全部转 pan）
+- ✅ Apple Pencil 屏幕双击 → 笔 ↔ 橡皮（barrel-tap 没法走 web，所以用 screen 双击代替）
+- ✅ 变宽填充丝带渲染（quadratic 中点平滑，避免 per-segment stroke 的狗牙）
 - ✅ 多档网格：无 / 点阵 / 方格 / 横线（按 G 循环）
 - ✅ IndexedDB 持久化 — 重开即恢复
 - ✅ 阅后即焚（一键清空，二级确认）
@@ -27,7 +29,7 @@
 | 操作 | 笔 | 鼠标 | 触屏 |
 | - | - | - | - |
 | 画 | Apple Pencil 落笔 | 左键拖 | 单指拖（前提：本设备没出现过 pen） |
-| 擦 | 工具切到 eraser；或 Pencil 副按钮 | 工具切到 eraser，左键拖 | 工具切到 eraser，单指拖 |
+| 擦 | 工具切到 eraser；或 Pencil 副按钮；或屏幕双击 | 工具切到 eraser，左键拖 | 工具切到 eraser，单指拖 |
 | 平移 | 单指拖（pencil 模式下） | 中键 / 右键拖；或按 Space 拖 | 双指拖 |
 | 缩放 | — | 触控板 pinch（Ctrl+滚轮）；或 +/- 键 | 双指 pinch |
 

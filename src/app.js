@@ -78,6 +78,12 @@ for (const b of els.toolBtns) {
   b.addEventListener("click", () => setTool(b.dataset.tool));
 }
 window.addEventListener("sp:settool", (e) => setTool(e.detail));
+// Apple Pencil 屏幕双击 → 笔↔橡皮
+window.addEventListener("sp:doubletap", () => {
+  const next = state.tool === "eraser" ? "pen" : "eraser";
+  setTool(next);
+  setStatus(`双击 · ${next === "eraser" ? "橡皮" : "笔"}`);
+});
 setTool(state.tool);
 
 // 颜色 swatch

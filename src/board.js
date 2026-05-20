@@ -261,43 +261,7 @@ export class Board {
   }
 
   _drawStroke(s) {
-    const ctx = this.ctx;
-    const { tx, ty, scale } = this.viewport;
-    const color = s.color === "ink" ? this._inkColor : s.color;
-    const p = s.points;
-    const N = p.length / 3;
-    if (N === 0) return;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    if (N === 1) {
-      const x = p[0] * scale + tx;
-      const y = p[1] * scale + ty;
-      const r = Math.max(0.5, (s.width * (0.5 + p[2])) * scale * 0.5);
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-
-    // 平均压感 → 单条 path，速度优先；变粗用每段独立 stroke
-    // 简化版：每段一笔，宽度用相邻两点平均
-    for (let i = 0; i < N - 1; i++) {
-      const x1 = p[i*3] * scale + tx;
-      const y1 = p[i*3+1] * scale + ty;
-      const w1 = p[i*3+2];
-      const x2 = p[(i+1)*3] * scale + tx;
-      const y2 = p[(i+1)*3+1] * scale + ty;
-      const w2 = p[(i+1)*3+2];
-      const lw = Math.max(0.5, s.width * (0.5 + (w1 + w2) * 0.5) * scale);
-      ctx.lineWidth = lw;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
+    drawStroke(this.ctx, s, this.viewport, this._inkColor);
   }
 
   _drawGrid() {
@@ -361,6 +325,89 @@ export class Board {
       ctx.stroke();
     }
   }
+}
+
+// ---- 渲染：变宽填充丝带 (避免 per-segment stroke 的狗牙) ----
+//
+// 对每个 sample 算出垂直当前切线的两个偏移点 (left/right side)，
+// 再用 quadraticCurveTo 沿 midpoint 走平滑曲线，两头各一个圆 cap 覆盖缝。
+//
+// 压感→宽度: (0.3 + 0.7 * p^0.6) — 低压更敏感、动态范围更大 (≈3.3x)。
+
+export function drawStroke(ctx, s, viewport, inkColor) {
+  const { tx, ty, scale } = viewport;
+  const color = s.color === "ink" ? inkColor : s.color;
+  const p = s.points;
+  const N = p.length / 3;
+  if (N === 0) return;
+
+  ctx.fillStyle = color;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // 屏幕坐标 + 半宽
+  const sx = new Float64Array(N);
+  const sy = new Float64Array(N);
+  const hw = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    sx[i] = p[i*3]   * scale + tx;
+    sy[i] = p[i*3+1] * scale + ty;
+    const pr = Math.max(0.05, Math.min(1, p[i*3+2]));
+    hw[i] = Math.max(0.25, s.width * (0.3 + 0.7 * Math.pow(pr, 0.6)) * scale * 0.5);
+  }
+
+  if (N === 1) {
+    ctx.beginPath();
+    ctx.arc(sx[0], sy[0], hw[0], 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  // 单点退化：第一个 / 最后一个点的法线用相邻段；中间点用前后段平均
+  const lx = new Float64Array(N), ly = new Float64Array(N);
+  const rx = new Float64Array(N), ry = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    let dxT, dyT;
+    if (i === 0) { dxT = sx[1] - sx[0]; dyT = sy[1] - sy[0]; }
+    else if (i === N - 1) { dxT = sx[N-1] - sx[N-2]; dyT = sy[N-1] - sy[N-2]; }
+    else { dxT = sx[i+1] - sx[i-1]; dyT = sy[i+1] - sy[i-1]; }
+    const len = Math.hypot(dxT, dyT) || 1;
+    // 法线: (-dy, dx) / len
+    const nx = -dyT / len, ny = dxT / len;
+    lx[i] = sx[i] + nx * hw[i];
+    ly[i] = sy[i] + ny * hw[i];
+    rx[i] = sx[i] - nx * hw[i];
+    ry[i] = sy[i] - ny * hw[i];
+  }
+
+  ctx.beginPath();
+  // 左侧: 起点 → 中段用 quadratic 过中点 → 终点
+  ctx.moveTo(lx[0], ly[0]);
+  for (let i = 1; i < N - 1; i++) {
+    const mx = (lx[i] + lx[i+1]) * 0.5;
+    const my = (ly[i] + ly[i+1]) * 0.5;
+    ctx.quadraticCurveTo(lx[i], ly[i], mx, my);
+  }
+  ctx.lineTo(lx[N-1], ly[N-1]);
+  // 跨过终点到右侧
+  ctx.lineTo(rx[N-1], ry[N-1]);
+  // 右侧反向回起点
+  for (let i = N - 2; i > 0; i--) {
+    const mx = (rx[i] + rx[i-1]) * 0.5;
+    const my = (ry[i] + ry[i-1]) * 0.5;
+    ctx.quadraticCurveTo(rx[i], ry[i], mx, my);
+  }
+  ctx.lineTo(rx[0], ry[0]);
+  ctx.closePath();
+  ctx.fill();
+
+  // 圆 cap 盖住接缝
+  ctx.beginPath();
+  ctx.arc(sx[0],   sy[0],   hw[0],   0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(sx[N-1], sy[N-1], hw[N-1], 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // ---- 工具函数 ----

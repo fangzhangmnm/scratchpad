@@ -1,3 +1,5 @@
+import { drawStroke } from "./board.js";
+
 // 导出 PNG / PDF。
 //
 // PNG (当前视图 / 全部内容): 离屏 canvas 重渲，再 toBlob → 下载。
@@ -115,45 +117,13 @@ async function renderToPng(board, opts, fileName) {
 }
 
 async function renderOffscreen(board, ctx, opts) {
-  const { width, height, tx, ty, scale, drawGrid } = opts;
+  const { width, height, tx, ty, scale } = opts;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = board._bgColor;
   ctx.fillRect(0, 0, width, height);
-
-  // 临时切 viewport，复用 Board.render 的逻辑：直接 inline 一次
-  const inkColor = board._inkColor;
+  const viewport = { tx, ty, scale };
   for (const s of board.strokes) {
-    const color = s.color === "ink" ? inkColor : s.color;
-    const p = s.points;
-    const N = p.length / 3;
-    if (N === 0) continue;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    if (N === 1) {
-      const x = p[0] * scale + tx;
-      const y = p[1] * scale + ty;
-      const r = Math.max(0.5, (s.width * (0.5 + p[2])) * scale * 0.5);
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      continue;
-    }
-    for (let i = 0; i < N - 1; i++) {
-      const x1 = p[i*3] * scale + tx;
-      const y1 = p[i*3+1] * scale + ty;
-      const w1 = p[i*3+2];
-      const x2 = p[(i+1)*3] * scale + tx;
-      const y2 = p[(i+1)*3+1] * scale + ty;
-      const w2 = p[(i+1)*3+2];
-      const lw = Math.max(0.5, s.width * (0.5 + (w1 + w2) * 0.5) * scale);
-      ctx.lineWidth = lw;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
+    drawStroke(ctx, s, viewport, board._inkColor);
   }
 }
 

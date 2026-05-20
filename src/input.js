@@ -21,6 +21,12 @@ import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
+// Apple Pencil 屏幕双击 = 切换 笔/橡皮 (barrel-tap 没法在 Web 拿到，退而求其次)
+const TAP_MAX_DURATION = 180;   // ms
+const TAP_MAX_MOVE = 8;          // 屏幕 px
+const DOUBLETAP_WINDOW = 400;    // ms
+const DOUBLETAP_MAX_GAP = 36;    // 屏幕 px
+
 export class InputController {
   constructor(board, { onChange, getTool, getColor, getWidth, status } = {}) {
     this.board = board;
@@ -39,6 +45,7 @@ export class InputController {
 
     this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
     this.redoStack = [];
+    this._lastPenTap = null;      // {time, x, y, stroke?}
 
     this._bind();
   }
@@ -121,7 +128,11 @@ export class InputController {
       }
     }
 
-    const rec = { pointerType: e.pointerType, role, x, y, startX: x, startY: y };
+    const rec = {
+      pointerType: e.pointerType, role,
+      x, y, startX: x, startY: y,
+      downTime: performance.now(),
+    };
     this.pointers.set(e.pointerId, rec);
 
     if (role === "draw") {
@@ -175,15 +186,47 @@ export class InputController {
     const rec = this.pointers.get(e.pointerId);
     if (!rec) return;
     this.pointers.delete(e.pointerId);
+    rec.x = e.clientX;
+    rec.y = e.clientY;
 
     if (rec.role === "gesture") {
-      // 退出 gesture 时还剩 ≤ 1 个 pointer：结束 gesture
-      if (this.pointers.size < 2) {
-        this._endGesture();
-      } else {
-        this._beginGesture(); // 重设基准
-      }
+      if (this.pointers.size < 2) this._endGesture();
+      else this._beginGesture();
       return;
+    }
+
+    // pen 双击 → 切换工具 (吃掉两笔)
+    let isPenTap = false;
+    if (e.pointerType === "pen" && !cancelled && rec.downTime) {
+      const now = performance.now();
+      const dur = now - rec.downTime;
+      const dist = Math.hypot(rec.x - rec.startX, rec.y - rec.startY);
+      isPenTap = dur < TAP_MAX_DURATION && dist < TAP_MAX_MOVE;
+      if (isPenTap) {
+        const lt = this._lastPenTap;
+        const isDouble = lt && (now - lt.time) < DOUBLETAP_WINDOW &&
+          Math.hypot(rec.startX - lt.x, rec.startY - lt.y) < DOUBLETAP_MAX_GAP;
+        if (isDouble) {
+          // 取消当前 stroke (还没 endStroke)
+          if (rec.role === "draw") this.board.cancelStroke(e.pointerId);
+          else if (rec.role === "erase") this.eraseSession = null;
+          // 撤销上一笔 tap：从 board / db / undo stack 都拔掉
+          if (lt.stroke) {
+            this.board.strokes = this.board.strokes.filter((x) => x !== lt.stroke);
+            this.board.requestRender();
+            if (lt.stroke.id != null) deleteStrokes([lt.stroke.id]).catch(() => {});
+            const ui = this.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke));
+            if (ui >= 0) { this.undoStack.splice(ui, 1); this._emitHistChange(); }
+          }
+          this._lastPenTap = null;
+          window.dispatchEvent(new CustomEvent("sp:doubletap"));
+          this.onChange();
+          return;
+        }
+        this._lastPenTap = { time: now, x: rec.startX, y: rec.startY, stroke: null };
+      } else {
+        this._lastPenTap = null;
+      }
     }
 
     if (rec.role === "draw") {
@@ -192,8 +235,8 @@ export class InputController {
       } else {
         const s = this.board.endStroke(e.pointerId);
         if (s) {
-          addStroke(s).then((saved) => {
-            // saved.id 已填，s 在内存里是同一对象
+          if (isPenTap && this._lastPenTap) this._lastPenTap.stroke = s;
+          addStroke(s).then(() => {
             this._pushUndo({ type: "add", strokes: [s] });
             this.onChange();
           }).catch((err) => {
@@ -205,7 +248,7 @@ export class InputController {
     } else if (rec.role === "erase") {
       this._commitErase();
     } else if (rec.role === "pan") {
-      if (!Object.values(this.pointers).some((p) => p.role === "pan")) {
+      if (![...this.pointers.values()].some((p) => p.role === "pan")) {
         delete document.body.dataset.panning;
       }
     }
