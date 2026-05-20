@@ -21,8 +21,10 @@ import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
-// 屏幕双击 = 切换 笔/橡皮。pen 或 finger 都能触发 (mouse 走键盘 E)。
-// 容差按手指 contact 的不精确算 — 触屏指尖中心点可能漂 30-50px。
+// 屏幕双击 = 切换 笔/橡皮。
+// **只有 pencil 模式下的手指** (penEverSeen=true，touch role=pan) 才触发。
+//   - pen 自己不触发：写等号 / i-dot / 短笔画都误判过 (上一版)。Pencil 用户走工具栏切换。
+//   - 触屏模式 (无 pen 见过) 的手指也不触发：finger 是绘图主输入，不能跟 dot 冲突。
 const TAP_MAX_DURATION = 220;    // ms — 单次按下持续多久还算 tap
 const TAP_MAX_MOVE = 16;          // 屏幕 px — 单次 tap 期间允许的位移
 const DOUBLETAP_WINDOW = 500;     // ms — 两次 tap 间隔
@@ -79,7 +81,12 @@ export class InputController {
   }
 
   _down(e) {
-    if (e.pointerType === "pen") this.penEverSeen = true;
+    if (e.pointerType === "pen") {
+      this.penEverSeen = true;
+      // pen 落下立即作废任何挂起的 touch tap：
+      // 防止 "手指 tap → pen 短笔 → 手指 tap" 三段误判成 finger 双击
+      this._lastTap = null;
+    }
     this.canvas.setPointerCapture?.(e.pointerId);
 
     const tool = this.getTool();
@@ -206,11 +213,11 @@ export class InputController {
       return;
     }
 
-    // 屏幕双击 → 切换工具。pen / touch 都收，mouse 走键盘。
-    // gesture / ignore (掌触) 不参与 — 多指 / 掌跟随不该被误判成 tap。
+    // 屏幕双击 → 切换工具。**只**在 pencil 模式下的手指生效 (palm-rejection 把
+    // touch 转 pan 的状态)。pen 自己不参与，触屏主输入模式下的 finger 也不参与。
     let isTap = false;
     const tapEligible = !cancelled && rec.downTime &&
-      (e.pointerType === "pen" || e.pointerType === "touch") &&
+      e.pointerType === "touch" && this.penEverSeen &&
       rec.role !== "gesture" && rec.role !== "ignore";
     if (tapEligible) {
       const now = performance.now();
