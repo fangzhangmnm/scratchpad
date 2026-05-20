@@ -1,0 +1,402 @@
+// Board = canvas + viewport + 渲染。
+//
+// 笔画存 *世界坐标*。viewport = {tx, ty, scale}, screen = world * scale + t.
+// scale = 1 时一个 world unit = 一个 CSS px。
+//
+// 笔画对象 (内存形态):
+//   { id, color, width, points: Float32Array [x,y,p,x,y,p,...], bbox: [x0,y0,x1,y1] }
+//
+// 渲染时按当前主题解析 "ink" → 当前 ink 色 (theme swap 时自动重渲)。
+
+import { getMeta, setMeta, debounce } from "./db.js";
+
+export const GRID_MODES = ["none", "dots", "squares", "lines"]; // 4 档循环
+const GRID_SIZE_WORLD = 32; // 一个网格 = 32 world units
+
+export class Board {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d", { alpha: false });
+    this.dpr = Math.max(1, window.devicePixelRatio || 1);
+    this.strokes = [];                  // 已 commit 的笔画
+    this.liveStrokes = new Map();       // pointerId → 正在画的 stroke (未入库)
+    this.viewport = { tx: 0, ty: 0, scale: 1 };
+    this.gridMode = "dots";
+    this.minScale = 0.1;
+    this.maxScale = 8;
+    this._raf = null;
+    this._inkColor = "#1b1b1b";
+    this._bgColor = "#f6f4ef";
+    this._gridColor = "#d8d2c4";
+
+    this.resize();
+    window.addEventListener("resize", () => this.resize());
+    this._persistViewport = debounce(() => {
+      setMeta("viewport", { ...this.viewport, gridMode: this.gridMode }).catch(() => {});
+    }, 300);
+  }
+
+  setStrokes(strokes) {
+    this.strokes = strokes.map((s) => ensureBbox(s));
+    this.requestRender();
+  }
+
+  async restoreViewport() {
+    const v = await getMeta("viewport").catch(() => null);
+    if (v && typeof v.tx === "number") {
+      this.viewport = { tx: v.tx, ty: v.ty, scale: clamp(v.scale, this.minScale, this.maxScale) };
+      if (v.gridMode && GRID_MODES.includes(v.gridMode)) this.gridMode = v.gridMode;
+    }
+    this.requestRender();
+  }
+
+  resetViewport() {
+    this.viewport = { tx: this.canvas.clientWidth / 2, ty: this.canvas.clientHeight / 2, scale: 1 };
+    this._persistViewport();
+    this.requestRender();
+  }
+
+  setGridMode(mode) {
+    if (!GRID_MODES.includes(mode)) return;
+    this.gridMode = mode;
+    this._persistViewport();
+    this.requestRender();
+  }
+
+  cycleGridMode() {
+    const i = GRID_MODES.indexOf(this.gridMode);
+    this.setGridMode(GRID_MODES[(i + 1) % GRID_MODES.length]);
+    return this.gridMode;
+  }
+
+  setThemeColors({ ink, bg, line }) {
+    this._inkColor = ink;
+    this._bgColor = bg;
+    this._gridColor = line;
+    this.requestRender();
+  }
+
+  // 屏幕 ↔ 世界
+  screenToWorld(sx, sy) {
+    const { tx, ty, scale } = this.viewport;
+    return { x: (sx - tx) / scale, y: (sy - ty) / scale };
+  }
+  worldToScreen(wx, wy) {
+    const { tx, ty, scale } = this.viewport;
+    return { x: wx * scale + tx, y: wy * scale + ty };
+  }
+
+  // 平移 (屏幕 px 增量)
+  pan(dx, dy) {
+    this.viewport.tx += dx;
+    this.viewport.ty += dy;
+    this._persistViewport();
+    this.requestRender();
+  }
+
+  // 以屏幕坐标 anchor 缩放 (factor > 1 放大)
+  zoomAt(anchorX, anchorY, factor) {
+    const oldScale = this.viewport.scale;
+    const newScale = clamp(oldScale * factor, this.minScale, this.maxScale);
+    if (newScale === oldScale) return;
+    const k = newScale / oldScale;
+    this.viewport.tx = anchorX - (anchorX - this.viewport.tx) * k;
+    this.viewport.ty = anchorY - (anchorY - this.viewport.ty) * k;
+    this.viewport.scale = newScale;
+    this._persistViewport();
+    this.requestRender();
+  }
+
+  // 直接设 viewport (gesture pan+zoom 用)
+  setViewport(tx, ty, scale) {
+    this.viewport.tx = tx;
+    this.viewport.ty = ty;
+    this.viewport.scale = clamp(scale, this.minScale, this.maxScale);
+    this._persistViewport();
+    this.requestRender();
+  }
+
+  // ---- live stroke (画的过程中) ----
+  beginStroke(pointerId, color, width, x, y, pressure) {
+    const s = {
+      color,
+      width,
+      points: [x, y, pressure],
+      bbox: [x, y, x, y],
+    };
+    this.liveStrokes.set(pointerId, s);
+    this.requestRender();
+    return s;
+  }
+  extendStroke(pointerId, x, y, pressure) {
+    const s = this.liveStrokes.get(pointerId);
+    if (!s) return;
+    s.points.push(x, y, pressure);
+    if (x < s.bbox[0]) s.bbox[0] = x;
+    if (y < s.bbox[1]) s.bbox[1] = y;
+    if (x > s.bbox[2]) s.bbox[2] = x;
+    if (y > s.bbox[3]) s.bbox[3] = y;
+    this.requestRender();
+  }
+  endStroke(pointerId) {
+    const s = this.liveStrokes.get(pointerId);
+    if (!s) return null;
+    this.liveStrokes.delete(pointerId);
+    // 转 Float32Array 节省内存
+    const arr = new Float32Array(s.points);
+    s.points = arr;
+    this.strokes.push(s);
+    this.requestRender();
+    return s;
+  }
+  cancelStroke(pointerId) {
+    if (this.liveStrokes.has(pointerId)) {
+      this.liveStrokes.delete(pointerId);
+      this.requestRender();
+    }
+  }
+
+  // ---- 擦除 (世界半径 r 内的笔画整条删) ----
+  hitStrokesAt(wx, wy, r) {
+    const r2 = r * r;
+    const hits = [];
+    for (const s of this.strokes) {
+      // bbox 快筛
+      if (wx < s.bbox[0] - r || wx > s.bbox[2] + r ||
+          wy < s.bbox[1] - r || wy > s.bbox[3] + r) continue;
+      // 逐段精测
+      const p = s.points;
+      const N = p.length / 3;
+      let hit = false;
+      if (N === 1) {
+        const dx = p[0] - wx, dy = p[1] - wy;
+        if (dx*dx + dy*dy <= r2) hit = true;
+      } else {
+        for (let i = 0; i < N - 1; i++) {
+          const ax = p[i*3], ay = p[i*3+1];
+          const bx = p[(i+1)*3], by = p[(i+1)*3+1];
+          if (segDistSq(wx, wy, ax, ay, bx, by) <= r2) { hit = true; break; }
+        }
+      }
+      if (hit) hits.push(s);
+    }
+    return hits;
+  }
+
+  removeStrokesByIds(ids) {
+    if (!ids.length) return;
+    const set = new Set(ids);
+    this.strokes = this.strokes.filter((s) => !set.has(s.id));
+    this.requestRender();
+  }
+
+  // 整体 bbox (导出 "全部内容" 用)
+  computeBoundingBox() {
+    if (!this.strokes.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of this.strokes) {
+      if (s.bbox[0] < x0) x0 = s.bbox[0];
+      if (s.bbox[1] < y0) y0 = s.bbox[1];
+      if (s.bbox[2] > x1) x1 = s.bbox[2];
+      if (s.bbox[3] > y1) y1 = s.bbox[3];
+    }
+    return { x0, y0, x1, y1 };
+  }
+
+  // ---- 渲染 ----
+  resize() {
+    const w = this.canvas.clientWidth || window.innerWidth;
+    const h = this.canvas.clientHeight || window.innerHeight;
+    this.dpr = Math.max(1, window.devicePixelRatio || 1);
+    this.canvas.width = Math.round(w * this.dpr);
+    this.canvas.height = Math.round(h * this.dpr);
+    // 第一次启动时 viewport 是 (0,0) → 把世界原点放到屏幕中心
+    if (this.viewport.tx === 0 && this.viewport.ty === 0 && !this._initialized) {
+      this.viewport.tx = w / 2;
+      this.viewport.ty = h / 2;
+    }
+    this._initialized = true;
+    this.requestRender();
+  }
+
+  requestRender() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => {
+      this._raf = null;
+      this.render();
+    });
+  }
+
+  render() {
+    const ctx = this.ctx;
+    const W = this.canvas.width, H = this.canvas.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = this._bgColor;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    this._drawGrid();
+
+    // 视口的 *世界* 边界 (做 bbox 剔除)
+    const wView = this._worldViewport();
+
+    for (const s of this.strokes) {
+      if (!aabbIntersect(s.bbox, wView)) continue;
+      this._drawStroke(s);
+    }
+    for (const s of this.liveStrokes.values()) {
+      this._drawStroke(s);
+    }
+  }
+
+  _worldViewport() {
+    const w = this.canvas.clientWidth || this.canvas.width / this.dpr;
+    const h = this.canvas.clientHeight || this.canvas.height / this.dpr;
+    const { tx, ty, scale } = this.viewport;
+    return [
+      (0 - tx) / scale, (0 - ty) / scale,
+      (w - tx) / scale, (h - ty) / scale,
+    ];
+  }
+
+  _drawStroke(s) {
+    const ctx = this.ctx;
+    const { tx, ty, scale } = this.viewport;
+    const color = s.color === "ink" ? this._inkColor : s.color;
+    const p = s.points;
+    const N = p.length / 3;
+    if (N === 0) return;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (N === 1) {
+      const x = p[0] * scale + tx;
+      const y = p[1] * scale + ty;
+      const r = Math.max(0.5, (s.width * (0.5 + p[2])) * scale * 0.5);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // 平均压感 → 单条 path，速度优先；变粗用每段独立 stroke
+    // 简化版：每段一笔，宽度用相邻两点平均
+    for (let i = 0; i < N - 1; i++) {
+      const x1 = p[i*3] * scale + tx;
+      const y1 = p[i*3+1] * scale + ty;
+      const w1 = p[i*3+2];
+      const x2 = p[(i+1)*3] * scale + tx;
+      const y2 = p[(i+1)*3+1] * scale + ty;
+      const w2 = p[(i+1)*3+2];
+      const lw = Math.max(0.5, s.width * (0.5 + (w1 + w2) * 0.5) * scale);
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+
+  _drawGrid() {
+    if (this.gridMode === "none") return;
+    const ctx = this.ctx;
+    const { tx, ty, scale } = this.viewport;
+    const w = this.canvas.clientWidth || this.canvas.width / this.dpr;
+    const h = this.canvas.clientHeight || this.canvas.height / this.dpr;
+
+    // grid 间距：scale 太小时跳大格，太大时跳小格 — 永远显示 ~16-64 px
+    let step = GRID_SIZE_WORLD;
+    let stepScreen = step * scale;
+    while (stepScreen < 16) { step *= 2; stepScreen *= 2; }
+    while (stepScreen > 64) { step /= 2; stepScreen /= 2; }
+
+    const startX = Math.floor((0 - tx) / stepScreen) * stepScreen + tx;
+    const startY = Math.floor((0 - ty) / stepScreen) * stepScreen + ty;
+
+    ctx.strokeStyle = this._gridColor;
+    ctx.fillStyle = this._gridColor;
+
+    if (this.gridMode === "dots") {
+      const r = Math.max(0.5, Math.min(1.5, stepScreen / 40));
+      ctx.beginPath();
+      for (let x = startX; x < w + stepScreen; x += stepScreen) {
+        for (let y = startY; y < h + stepScreen; y += stepScreen) {
+          ctx.moveTo(x + r, y);
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+        }
+      }
+      ctx.fill();
+    } else if (this.gridMode === "squares") {
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = startX; x < w + stepScreen; x += stepScreen) {
+        ctx.moveTo(Math.round(x) + 0.5, 0);
+        ctx.lineTo(Math.round(x) + 0.5, h);
+      }
+      for (let y = startY; y < h + stepScreen; y += stepScreen) {
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w, Math.round(y) + 0.5);
+      }
+      ctx.stroke();
+    } else if (this.gridMode === "lines") {
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let y = startY; y < h + stepScreen; y += stepScreen) {
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w, Math.round(y) + 0.5);
+      }
+      ctx.stroke();
+    }
+
+    // 原点十字 (淡，只在 scale 接近 1 时显示)
+    if (scale > 0.4 && scale < 4) {
+      ctx.strokeStyle = this._gridColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(tx - 8, ty); ctx.lineTo(tx + 8, ty);
+      ctx.moveTo(tx, ty - 8); ctx.lineTo(tx, ty + 8);
+      ctx.stroke();
+    }
+  }
+}
+
+// ---- 工具函数 ----
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+function aabbIntersect(b, v) {
+  // b = [x0,y0,x1,y1], v 同
+  return !(b[2] < v[0] || b[0] > v[2] || b[3] < v[1] || b[1] > v[3]);
+}
+
+function segDistSq(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx*dx + dy*dy;
+  if (len2 === 0) {
+    const ex = px - ax, ey = py - ay;
+    return ex*ex + ey*ey;
+  }
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  const ex = px - cx, ey = py - cy;
+  return ex*ex + ey*ey;
+}
+
+function ensureBbox(s) {
+  if (s.bbox && s.bbox.length === 4) return s;
+  const p = s.points;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = p[i], y = p[i+1];
+    if (x < x0) x0 = x;
+    if (y < y0) y0 = y;
+    if (x > x1) x1 = x;
+    if (y > y1) y1 = y;
+  }
+  s.bbox = [x0, y0, x1, y1];
+  return s;
+}

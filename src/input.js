@@ -1,0 +1,414 @@
+// Pointer events + 手势。
+//
+// 行为矩阵:
+//   tool = pen / eraser:
+//     pen (Apple Pencil / stylus)     → 画 / 擦
+//     touch (手指)                    → 一旦本设备见过 pen，永远忽略 (防误触)；否则单指画
+//     2 个 touch 同时按下             → 平移 + pinch 缩放，取消正在画的 stroke
+//     mouse 左键                      → 画
+//     mouse 中键 / 右键               → 平移
+//     按住 space                      → 临时进入 hand (释放回原工具)
+//   tool = hand:
+//     任何 pointer 拖动               → 平移
+//
+//   wheel (mac 触控板双指):
+//     ctrlKey (pinch)                 → 以光标为中心缩放
+//     otherwise                       → 平移 (与浏览器滚动一致)
+//
+// 撤销: 每画完一笔 / 每擦一批 → 推入 undo stack。redo stack 在新动作时清空。
+
+import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
+
+const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
+
+export class InputController {
+  constructor(board, { onChange, getTool, getColor, getWidth, status } = {}) {
+    this.board = board;
+    this.canvas = board.canvas;
+    this.onChange = onChange || (() => {});
+    this.getTool = getTool || (() => "pen");
+    this.getColor = getColor || (() => "ink");
+    this.getWidth = getWidth || (() => 2.2);
+    this.status = status || (() => {});
+
+    this.pointers = new Map();    // pointerId → {pointerType, role, x, y, pressure, startX, startY}
+    this.penEverSeen = false;     // 一旦见过 pen，touch 不再绘
+    this.spaceDown = false;
+    this.gestureStart = null;     // {dist, midX, midY, vp:{tx,ty,scale}}
+    this.eraseSession = null;     // {ids: Set, strokesById: Map<id,stroke>}
+
+    this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
+    this.redoStack = [];
+
+    this._bind();
+  }
+
+  _bind() {
+    const c = this.canvas;
+    c.addEventListener("pointerdown", (e) => this._down(e));
+    c.addEventListener("pointermove", (e) => this._move(e));
+    c.addEventListener("pointerup", (e) => this._up(e));
+    c.addEventListener("pointercancel", (e) => this._up(e, true));
+    c.addEventListener("pointerleave", (e) => this._up(e, true));
+    c.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    c.addEventListener("wheel", (e) => this._wheel(e), { passive: false });
+
+    window.addEventListener("keydown", (e) => this._keydown(e));
+    window.addEventListener("keyup", (e) => this._keyup(e));
+  }
+
+  _shouldDraw(e) {
+    // pencil 时禁触
+    if (e.pointerType === "touch" && this.penEverSeen) return false;
+    return true;
+  }
+
+  _down(e) {
+    if (e.pointerType === "pen") this.penEverSeen = true;
+    this.canvas.setPointerCapture?.(e.pointerId);
+
+    const tool = this.getTool();
+    const x = e.clientX, y = e.clientY;
+
+    // pen 正在画 → 进来的 touch 当掌触忽略 (但仍登记 pointers，便于 up 时清理)
+    const penDrawing = [...this.pointers.values()].some(
+      (p) => p.pointerType === "pen" && (p.role === "draw" || p.role === "erase"),
+    );
+    if (e.pointerType === "touch" && penDrawing) {
+      this.pointers.set(e.pointerId, { pointerType: e.pointerType, role: "ignore", x, y });
+      e.preventDefault();
+      return;
+    }
+
+    // 第二个 touch 进来 → 进 gesture (pinch / pan)
+    const activeTouches = [...this.pointers.values()].filter(
+      (p) => p.pointerType === "touch" && p.role !== "ignore",
+    );
+    if (e.pointerType === "touch" && activeTouches.length >= 1) {
+      for (const [pid, p] of this.pointers) {
+        if (p.role === "draw") {
+          this.board.cancelStroke(pid);
+          p.role = "gesture";
+        } else if (p.role === "erase") {
+          this._commitErase();
+          p.role = "gesture";
+        }
+      }
+      this.pointers.set(e.pointerId, { pointerType: e.pointerType, role: "gesture", x, y });
+      this._beginGesture();
+      e.preventDefault();
+      return;
+    }
+
+    // 决定角色
+    let role = null;
+    if (tool === "hand" || this.spaceDown) {
+      role = "pan";
+    } else if (e.pointerType === "mouse") {
+      if (e.button === 0) role = tool === "eraser" ? "erase" : "draw";
+      else role = "pan"; // 中键 / 右键
+    } else if (e.pointerType === "pen") {
+      // 二级按钮 (Apple Pencil 双击 / Wacom 侧键) → erase
+      if (e.button === 2 || e.buttons & 2) role = "erase";
+      else role = tool === "eraser" ? "erase" : "draw";
+    } else if (e.pointerType === "touch") {
+      if (!this._shouldDraw(e)) {
+        // pencil 模式下手指 → pan
+        role = "pan";
+      } else {
+        role = tool === "eraser" ? "erase" : "draw";
+      }
+    }
+
+    const rec = { pointerType: e.pointerType, role, x, y, startX: x, startY: y };
+    this.pointers.set(e.pointerId, rec);
+
+    if (role === "draw") {
+      const { x: wx, y: wy } = this.board.screenToWorld(x, y);
+      const pressure = effectivePressure(e);
+      this.board.beginStroke(e.pointerId, this.getColor(), this.getWidth(), wx, wy, pressure);
+    } else if (role === "erase") {
+      this._beginErase();
+      this._doErase(x, y);
+    } else if (role === "pan") {
+      document.body.dataset.panning = "1";
+    }
+    e.preventDefault();
+  }
+
+  _move(e) {
+    const rec = this.pointers.get(e.pointerId);
+    if (!rec) return;
+    rec.x = e.clientX;
+    rec.y = e.clientY;
+
+    if (this.gestureStart) {
+      this._updateGesture();
+      e.preventDefault();
+      return;
+    }
+
+    if (rec.role === "draw") {
+      // 用 coalesced events 拿到所有亚帧采样 → 笔迹平滑
+      const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
+      const list = (events && events.length) ? events : [e];
+      for (const ev of list) {
+        const { x: wx, y: wy } = this.board.screenToWorld(ev.clientX, ev.clientY);
+        const pressure = effectivePressure(ev);
+        this.board.extendStroke(e.pointerId, wx, wy, pressure);
+      }
+    } else if (rec.role === "erase") {
+      this._doErase(e.clientX, e.clientY);
+    } else if (rec.role === "pan") {
+      // 用 movementX/Y 更稳 (pointer capture 时仍然有效)
+      const dx = e.movementX || (e.clientX - (rec._lastX ?? e.clientX));
+      const dy = e.movementY || (e.clientY - (rec._lastY ?? e.clientY));
+      rec._lastX = e.clientX;
+      rec._lastY = e.clientY;
+      this.board.pan(dx, dy);
+    }
+    e.preventDefault();
+  }
+
+  _up(e, cancelled = false) {
+    const rec = this.pointers.get(e.pointerId);
+    if (!rec) return;
+    this.pointers.delete(e.pointerId);
+
+    if (rec.role === "gesture") {
+      // 退出 gesture 时还剩 ≤ 1 个 pointer：结束 gesture
+      if (this.pointers.size < 2) {
+        this._endGesture();
+      } else {
+        this._beginGesture(); // 重设基准
+      }
+      return;
+    }
+
+    if (rec.role === "draw") {
+      if (cancelled) {
+        this.board.cancelStroke(e.pointerId);
+      } else {
+        const s = this.board.endStroke(e.pointerId);
+        if (s) {
+          addStroke(s).then((saved) => {
+            // saved.id 已填，s 在内存里是同一对象
+            this._pushUndo({ type: "add", strokes: [s] });
+            this.onChange();
+          }).catch((err) => {
+            console.error("addStroke failed", err);
+            this.status("保存失败");
+          });
+        }
+      }
+    } else if (rec.role === "erase") {
+      this._commitErase();
+    } else if (rec.role === "pan") {
+      if (!Object.values(this.pointers).some((p) => p.role === "pan")) {
+        delete document.body.dataset.panning;
+      }
+    }
+  }
+
+  // ---- gesture (2 finger pan + pinch) ----
+  _gestureTouches() {
+    return [...this.pointers.values()].filter(
+      (p) => p.pointerType === "touch" && p.role !== "ignore",
+    );
+  }
+  _beginGesture() {
+    const touches = this._gestureTouches();
+    if (touches.length < 2) return;
+    const [a, b] = touches;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    this.gestureStart = {
+      dist,
+      midX, midY,
+      vp: { ...this.board.viewport },
+    };
+    document.body.dataset.panning = "1";
+  }
+  _updateGesture() {
+    const touches = this._gestureTouches();
+    if (touches.length < 2 || !this.gestureStart) return;
+    const [a, b] = touches;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const g = this.gestureStart;
+    const k = dist / g.dist;
+    // 新 viewport: 先 pan (mid 漂移), 再围绕 mid 缩放
+    let newScale = g.vp.scale * k;
+    newScale = Math.max(this.board.minScale, Math.min(this.board.maxScale, newScale));
+    const actualK = newScale / g.vp.scale;
+    const newTx = midX - (g.midX - g.vp.tx) * actualK;
+    const newTy = midY - (g.midY - g.vp.ty) * actualK;
+    this.board.setViewport(newTx, newTy, newScale);
+  }
+  _endGesture() {
+    this.gestureStart = null;
+    delete document.body.dataset.panning;
+  }
+
+  // ---- erase ----
+  _beginErase() {
+    this.eraseSession = { ids: new Set(), strokes: [] };
+  }
+  _doErase(sx, sy) {
+    if (!this.eraseSession) return;
+    const { x: wx, y: wy } = this.board.screenToWorld(sx, sy);
+    const r = ERASER_RADIUS_SCREEN / this.board.viewport.scale;
+    const hits = this.board.hitStrokesAt(wx, wy, r);
+    if (!hits.length) return;
+    const newIds = [];
+    for (const s of hits) {
+      if (s.id == null) continue; // 还未入库 (理论上不会，因为是 strokes 数组里的)
+      if (this.eraseSession.ids.has(s.id)) continue;
+      this.eraseSession.ids.add(s.id);
+      this.eraseSession.strokes.push(s);
+      newIds.push(s.id);
+    }
+    if (newIds.length) {
+      this.board.removeStrokesByIds(newIds);
+    }
+  }
+  _commitErase() {
+    if (!this.eraseSession) return;
+    const sess = this.eraseSession;
+    this.eraseSession = null;
+    if (!sess.strokes.length) return;
+    deleteStrokes([...sess.ids]).then(() => {
+      this._pushUndo({ type: "erase", strokes: sess.strokes });
+      this.onChange();
+    }).catch((err) => {
+      console.error("deleteStrokes failed", err);
+      this.status("擦除保存失败");
+    });
+  }
+
+  // ---- wheel ----
+  _wheel(e) {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      // pinch
+      const factor = Math.exp(-e.deltaY * 0.01);
+      this.board.zoomAt(e.clientX, e.clientY, factor);
+    } else {
+      // 平移
+      let dx = -e.deltaX, dy = -e.deltaY;
+      if (e.shiftKey && dx === 0) { dx = dy; dy = 0; }
+      this.board.pan(dx, dy);
+    }
+  }
+
+  // ---- keys ----
+  _keydown(e) {
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.code === "Space" && !this.spaceDown) {
+      this.spaceDown = true;
+      document.body.dataset.spacePan = "1";
+      e.preventDefault();
+      return;
+    }
+    const z = (e.ctrlKey || e.metaKey);
+    if (z && e.code === "KeyZ") {
+      if (e.shiftKey) this.redo(); else this.undo();
+      e.preventDefault();
+      return;
+    }
+    if (z && e.code === "KeyY") {
+      this.redo();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "p" || e.key === "P") this._emitTool("pen");
+    else if (e.key === "e" || e.key === "E") this._emitTool("eraser");
+    else if (e.key === "h" || e.key === "H") this._emitTool("hand");
+    else if (e.key === "g" || e.key === "G") this._emitGridCycle();
+    else if (e.key === "0") this.board.resetViewport();
+    else if (e.key === "=" || e.key === "+") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.2);
+    else if (e.key === "-" || e.key === "_") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.2);
+  }
+  _keyup(e) {
+    if (e.code === "Space") {
+      this.spaceDown = false;
+      delete document.body.dataset.spacePan;
+    }
+  }
+  _emitTool(tool) { window.dispatchEvent(new CustomEvent("sp:settool", { detail: tool })); }
+  _emitGridCycle() { window.dispatchEvent(new CustomEvent("sp:gridcycle")); }
+
+  // ---- undo/redo ----
+  _pushUndo(entry) {
+    this.undoStack.push(entry);
+    if (this.undoStack.length > 100) this.undoStack.shift();
+    this.redoStack.length = 0;
+    this._emitHistChange();
+  }
+  canUndo() { return this.undoStack.length > 0; }
+  canRedo() { return this.redoStack.length > 0; }
+
+  async undo() {
+    const e = this.undoStack.pop();
+    if (!e) return;
+    if (e.type === "add") {
+      const ids = e.strokes.map((s) => s.id).filter((x) => x != null);
+      await deleteStrokes(ids).catch(() => {});
+      this.board.removeStrokesByIds(ids);
+    } else if (e.type === "erase") {
+      // 重新插入（用原 id）
+      for (const s of e.strokes) {
+        await putStrokeWithId(s).catch(() => {});
+        this.board.strokes.push(s);
+      }
+      this.board.requestRender();
+    }
+    this.redoStack.push(e);
+    this._emitHistChange();
+    this.onChange();
+  }
+  async redo() {
+    const e = this.redoStack.pop();
+    if (!e) return;
+    if (e.type === "add") {
+      for (const s of e.strokes) {
+        await putStrokeWithId(s).catch(() => {});
+        this.board.strokes.push(s);
+      }
+      this.board.requestRender();
+    } else if (e.type === "erase") {
+      const ids = e.strokes.map((s) => s.id).filter((x) => x != null);
+      await deleteStrokes(ids).catch(() => {});
+      this.board.removeStrokesByIds(ids);
+    }
+    this.undoStack.push(e);
+    this._emitHistChange();
+    this.onChange();
+  }
+
+  clearHistory() {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._emitHistChange();
+  }
+
+  _emitHistChange() {
+    window.dispatchEvent(new CustomEvent("sp:histchange", {
+      detail: { canUndo: this.canUndo(), canRedo: this.canRedo() },
+    }));
+  }
+}
+
+function effectivePressure(e) {
+  // 鼠标 / 不支持压感 → pressure 是 0.5 (W3C 默认)，给点变化感
+  if (e.pointerType === "mouse") return 0.5;
+  // Pencil: pressure 范围 (0,1)。0 表示传感器没数据 (按 → 抬瞬间)
+  const p = typeof e.pressure === "number" ? e.pressure : 0.5;
+  if (p === 0) return 0.5;
+  return Math.max(0.05, Math.min(1, p));
+}

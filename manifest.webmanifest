@@ -1,0 +1,20 @@
+{
+  "name": "ScratchPad",
+  "short_name": "ScratchPad",
+  "description": "无限大数学草稿纸。阅后即焚：没有 library，只有 clear。Apple Pencil / stylus / 鼠标都能用。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f4ef",
+  "theme_color": "#f6f4ef",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
