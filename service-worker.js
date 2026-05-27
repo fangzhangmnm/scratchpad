@@ -3,8 +3,12 @@
 //
 // ScratchPad 是纯本地，没有任何运行时跨源请求 — vendor 也在仓库里。
 // 所以 SW 只关心同源即可。
+//
+// v8 起：响应 .js 时改写 import URL 加 ?v=VERSION，绕开 iPad Safari WKWebView
+// 的 V8 bytecode cache (按 URL 索引，URL 没变就用旧 bytecode，即使 SW 返回了
+// 新内容也忽略)。详见 docs/pointer-and-pen-input.md / WebPaint 同款问题。
 
-const CACHE_VERSION = "v7-2026-05-20";
+const CACHE_VERSION = "v8-2026-05-24";
 const CACHE_NAME = `scratchpad-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -23,6 +27,22 @@ const PRECACHE_URLS = [
   "./src/export.js",
   "./src/vendor/jspdf.umd.min.js",
 ];
+
+// .js module 走 import-URL 改写。vendor/ 是 UMD 不用改 (没有 ES import)。
+function isJSModule(url) {
+  return url.pathname.endsWith(".js")
+    && url.pathname.includes("/src/")
+    && !url.pathname.includes("/vendor/");
+}
+
+// 把源码里 `from "./xxx.js"` 和 `import("./xxx.js")` 改成 `?v=VERSION`。
+// 版本变 = URL 变 = bytecode 缓存键变 = 强制重编译。
+function rewriteImports(text) {
+  const v = `?v=${CACHE_VERSION}`;
+  return text
+    .replace(/(\bfrom\s+)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`)
+    .replace(/(\bimport\s*\(\s*)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`);
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -60,8 +80,12 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req);
-    const network = fetch(req).then((resp) => {
+    // ignoreSearch：cache 按裸 URL 存；带 ?v=N 的请求也能命中
+    const cached = await cache.match(req, { ignoreSearch: true });
+    // 拿网络 / 写 cache 都按裸 URL
+    const bareReq = new Request(url.origin + url.pathname);
+
+    const network = fetch(bareReq).then((resp) => {
       if (resp && resp.ok) {
         if (cached) {
           const cE = cached.headers.get("etag");
@@ -71,17 +95,27 @@ self.addEventListener("fetch", (event) => {
           const changed = (cE && fE && cE !== fE) || (!cE && cL && fL && cL !== fL);
           if (changed) notifyUpdate(req.url).catch(() => {});
         }
-        cache.put(req, resp.clone()).catch(() => {});
+        cache.put(bareReq, resp.clone()).catch(() => {});
       }
       return resp;
     }).catch(() => null);
 
+    async function maybeRewrite(resp) {
+      if (!resp || !isJSModule(url)) return resp;
+      const text = await resp.text();
+      const rewritten = rewriteImports(text);
+      return new Response(rewritten, {
+        status: resp.status,
+        headers: { "Content-Type": "application/javascript" },
+      });
+    }
+
     if (cached) {
       network.catch(() => {});
-      return cached;
+      return await maybeRewrite(cached.clone());
     }
     const resp = await network;
-    if (resp) return resp;
+    if (resp) return await maybeRewrite(resp.clone());
     if (req.mode === "navigate") {
       const fallback = await cache.match("./index.html");
       if (fallback) return fallback;

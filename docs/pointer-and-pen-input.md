@@ -48,6 +48,52 @@ const list = (events && events.length) ? events : [e];
 for (const ev of list) { /* one extendStroke per ev */ }
 ```
 
+### ⚠ Cross-batch replay on Safari iOS (the big one)
+
+`getCoalescedEvents()` on iPad Safari sometimes hands you the same samples
+in the next `pointermove` callback too. Pattern:
+
+```
+_move call 1: getCoalescedEvents() → [t=4, t=8, t=13, t=17, t=21]
+_move call 2: getCoalescedEvents() → [t=4, t=8, t=13, t=17, t=21, t=25, t=29]
+                                      ↑─── repeats ───────↑   ↑ new ↑
+```
+
+Feed the whole list to your arc-length / segment algorithm → time goes
+backwards at batch boundary → polyline folds back → distance accumulates
+wrong → **periodic dense / sparse banding** in the stroke. Mouse doesn't
+trigger this (mouse coalesced is usually a single event).
+
+**Visually subtle in vector strokes**; with a brush engine that stamps by
+arc-length it's plain to see (WebPaint hit this first). Fix is one line:
+drop events whose `timeStamp` isn't strictly greater than the last
+accepted one.
+
+```js
+// init on _down:
+rec.lastEventTs = -Infinity;
+
+// each event in the coalesced loop:
+if (ev.timeStamp <= rec.lastEventTs) continue;
+rec.lastEventTs = ev.timeStamp;
+// ... rest of loop
+```
+
+Use `<=` not `<` — fully duplicate-timestamp events should also drop.
+Cheap, safe, do it.
+
+### Pencil `clientX/Y` are integer-quantized on Safari iOS
+
+`PointerEvent.clientX/Y` from Apple Pencil on Safari iOS are **integers**.
+Everywhere else (mouse, other platforms) they're doubles. At 1:1 zoom
+moving close to horizontal/vertical, the polyline has visible stair-stepping
+(±0.5 px noise).
+
+Don't try to "fix" — sub-pixel reconstruction from neighboring sample
+direction + timestamp is a project on its own. For handwriting, the
+in-stroke LPF below masks it. Just be aware when doing curvature /
+velocity analysis.
+
 ## Palm rejection — the `penEverSeen` flag
 
 iPad's flow: when the user puts pen tip near the screen, the wrist
@@ -239,12 +285,43 @@ See [stroke-rendering.md](stroke-rendering.md) for the full saga.
 Short version: when the "pressure" toggle is OFF, write `1.0` into
 the pressure column of every point. Don't gate rendering on a flag.
 
+The full pressure pipeline has three traps:
+
 ```js
-function effectivePressure(e, enabled) {
+// rec init on _down (draw role):
+rec.lastP = null;     // last valid raw pressure (fallback for sensor-zero blips)
+rec.smP = -1;         // LPF state; -1 = not seeded yet
+
+function effectivePressureFor(rec, e, enabled) {
   if (!enabled) return 1;
-  if (e.pointerType === "mouse") return 0.5;
-  const p = typeof e.pressure === "number" ? e.pressure : 0.5;
-  if (p === 0) return 0.5;                       // sensor warmup
-  return Math.max(0.05, Math.min(1, p));
+  let raw;
+  if (e.pointerType === "mouse") {
+    raw = 0.5;
+  } else {
+    const r = typeof e.pressure === "number" ? e.pressure : null;
+    if (r == null || r === 0) {
+      // (Trap 1) Pen up / sensor warmup pulses pressure = 0 even while
+      // the tip is still on glass. If you treat that as "max thin"
+      // (or "max thick" with inverted maps), the stroke END flicks
+      // visibly. Fall back to the last valid sample.
+      // (Trap 2) Initial sample before lastP exists → 0.2, not 0.5.
+      // 0.5 makes every start bulb a bit; 0.2 starts narrow & honest.
+      raw = rec.lastP != null ? rec.lastP : 0.2;
+    } else {
+      raw = Math.max(0.05, Math.min(1, r));
+      rec.lastP = raw;
+    }
+  }
+  // (Trap 3) Apple Pencil signals have ~10 Hz hand-tremor in the
+  // pressure channel. Mapped into width with p^0.6 it visibly pulses
+  // along the stroke ("mid-bulb"). One-pole LPF at α≈0.4 damps it.
+  // sentinel < 0 → first sample bypasses LPF so taps / i-dots stay raw.
+  if (rec.smP < 0) rec.smP = raw;
+  else rec.smP += PRESSURE_SMOOTH_ALPHA * (raw - rec.smP);
+  return rec.smP;
 }
 ```
+
+`PRESSURE_SMOOTH_ALPHA = 0.4` was WebPaint's tuned value. Anything
+much lower starts to feel laggy on quick pressure changes. Higher
+lets the 10 Hz pulses through.

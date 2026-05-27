@@ -159,6 +159,62 @@ iPad has no devtools so the failure is silent and total.
 5. Resist shipping HTML changes without bumping. Even cosmetic HTML
    change that affects DOM structure needs a bump.
 
+## ⚠ iPad Safari WKWebView V8 bytecode cache
+
+Even after the SW returns new JS content at the same URL, **WKWebView
+serves the OLD V8 bytecode** for that URL. The bytecode cache is keyed
+by URL, not by content. SW replacing the cache entry doesn't help.
+
+Symptom: ship a JS fix, bump SW, user gets the update toast, reloads
+→ still old behavior. Looking at the SW you'd swear the new code is
+in cache. It is. WKWebView just isn't compiling it.
+
+**Fix: rewrite import URLs inside JS responses to embed the version**,
+so the URLs themselves change between releases and WKWebView is forced
+to recompile.
+
+```js
+function isJSModule(url) {
+  return url.pathname.endsWith(".js")
+    && url.pathname.includes("/src/")
+    && !url.pathname.includes("/vendor/");  // UMD doesn't have ES imports
+}
+
+function rewriteImports(text) {
+  const v = `?v=${CACHE_VERSION}`;
+  return text
+    .replace(/(\bfrom\s+)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`)
+    .replace(/(\bimport\s*\(\s*)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`);
+}
+
+// in fetch handler:
+async function maybeRewrite(resp) {
+  if (!resp || !isJSModule(url)) return resp;
+  const text = await resp.text();
+  return new Response(rewriteImports(text), {
+    status: resp.status,
+    headers: { "Content-Type": "application/javascript" },
+  });
+}
+// cache stores under the bare URL; lookups use ignoreSearch
+const cached = await cache.match(req, { ignoreSearch: true });
+const bareReq = new Request(url.origin + url.pathname);  // for fetch + cache.put
+```
+
+Caveat: the entry script (the one referenced in `<script type="module"
+src="./src/app.js">`) is still loaded under its bare URL, so its
+bytecode cache *can* still hit. Keep `app.js` thin (just imports +
+boot wiring) so its own bytecode is invariant to feature changes —
+the heavy logic lives in modules whose URLs version-bump.
+
+If a release ships a substantive change to `app.js` itself, users may
+need to fully kill the PWA to pick it up. Defer features into modules
+to dodge this.
+
+Original WebPaint write-up:
+`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/ipad-coalesced-events.md`
+(section 3).
+
 ## What I'd do differently next time
 
 - Consider serving a separate `version.json` and gating UI features on
@@ -168,4 +224,5 @@ iPad has no devtools so the failure is silent and total.
   (always fresh shell), cache-first for everything else. That breaks
   the "instantly opens offline" promise though.
 
-For now, defensive coding + version bumps is what's there.
+For now, defensive coding + version bumps + JS import URL rewrite is
+what's there.

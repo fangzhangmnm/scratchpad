@@ -35,6 +35,11 @@ const DOUBLETAP_MAX_GAP = 80;     // 屏幕 px — 两次 tap 的位置容忍
 // 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
 const STROKE_SMOOTH_ALPHA = 0.65;
 
+// 压感 LPF (stabilizer)。Pencil 自带 ~10Hz 握笔抖动 (手腕/食指生理频率) 灌进 size
+// 会让笔每秒 10 次缩胀 → 视觉结节 / mid-bulb。一阶 IIR damp 之。
+// rec.smP = -1 sentinel：第一颗 stamp 用 raw (保 tap 满压)，之后才 LPF。
+const PRESSURE_SMOOTH_ALPHA = 0.4;
+
 export class InputController {
   constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, status } = {}) {
     this.board = board;
@@ -147,12 +152,16 @@ export class InputController {
       x, y, startX: x, startY: y,
       smX: x, smY: y,                  // 平滑后的屏幕坐标 (draw 用)
       downTime: performance.now(),
+      // 笔画状态：压感 LPF + 抬笔 fallback + coalesced 单调过滤
+      lastP: null,                     // 上一颗有效 raw 压感
+      smP: -1,                         // LPF state，-1 = 还没收到首颗
+      lastEventTs: -Infinity,          // Safari iOS coalesced 边界回放过滤
     };
     this.pointers.set(e.pointerId, rec);
 
     if (role === "draw") {
       const { x: wx, y: wy } = this.board.screenToWorld(x, y);
-      const pressure = effectivePressure(e, this.getPressureEnabled());
+      const pressure = effectivePressureFor(rec, e, this.getPressureEnabled());
       this.board.beginStroke(e.pointerId, this.getColor(), this.getWidth(), wx, wy, pressure);
     } else if (role === "erase") {
       this._beginErase();
@@ -181,10 +190,17 @@ export class InputController {
       const list = (events && events.length) ? events : [e];
       const enabled = this.getPressureEnabled();
       for (const ev of list) {
+        // **Safari iOS getCoalescedEvents() 跨批次回放过滤**：每次 pointermove
+        // 的 coalesced 列表可能把上一批末尾几个样本回放进来 (eg 上批 t=21 末尾，
+        // 下批 t=4..25 又来一遍)。直接用 → 时间回退 → polyline 折返 → arc-length
+        // 算法被注水 → 视觉上周期性疏密波。鼠标无此问题 (鼠标 coalesced 通常 ≤1)。
+        // 一行 if 挡住。详见 docs/pointer-and-pen-input.md。
+        if (ev.timeStamp <= rec.lastEventTs) continue;
+        rec.lastEventTs = ev.timeStamp;
         rec.smX += STROKE_SMOOTH_ALPHA * (ev.clientX - rec.smX);
         rec.smY += STROKE_SMOOTH_ALPHA * (ev.clientY - rec.smY);
         const { x: wx, y: wy } = this.board.screenToWorld(rec.smX, rec.smY);
-        const pressure = effectivePressure(ev, enabled);
+        const pressure = effectivePressureFor(rec, ev, enabled);
         this.board.extendStroke(e.pointerId, wx, wy, pressure);
       }
     } else if (rec.role === "erase") {
@@ -470,11 +486,30 @@ export class InputController {
   }
 }
 
-function effectivePressure(e, enabled) {
-  // 压感关 → 一律 1.0 (满压感)，渲染层会自动走 uniform 单 path 描边
+// 压感取值：
+//   - 压感关 → 一律 1.0 (满压感，渲染层会走 uniform 单 path 描边)
+//   - mouse → 0.5 (无传感器)
+//   - pen / touch：ev.pressure 抬笔瞬间会突然掉 0 (传感器 race)，沿用 rec.lastP
+//     避免笔尾突然变粗 / 变细。起手 warmup 也常是 0 但还没 lastP → 退到 0.2
+//     (不退 0.5 是怕起手鼓 bulb；WebPaint 同款经验值)。
+//   - 算完 raw 后过一道 LPF (rec.smP，α=PRESSURE_SMOOTH_ALPHA)：damp Pencil 自带
+//     的 ~10Hz 握笔抖动 + 削传感器尖刺。sentinel rec.smP < 0 = 首颗用 raw
+//     (这样 tap / 短点子直接是 raw 满压，不被 LPF 拖)
+function effectivePressureFor(rec, e, enabled) {
   if (!enabled) return 1;
-  if (e.pointerType === "mouse") return 0.5; // 鼠标没有传感器
-  const p = typeof e.pressure === "number" ? e.pressure : 0.5;
-  if (p === 0) return 0.5;                   // 起 / 收笔瞬间传感器返 0
-  return Math.max(0.05, Math.min(1, p));
+  let raw;
+  if (e.pointerType === "mouse") {
+    raw = 0.5;
+  } else {
+    const r = typeof e.pressure === "number" ? e.pressure : null;
+    if (r == null || r === 0) {
+      raw = rec.lastP != null ? rec.lastP : 0.2;
+    } else {
+      raw = Math.max(0.05, Math.min(1, r));
+      rec.lastP = raw;
+    }
+  }
+  if (rec.smP < 0) rec.smP = raw;
+  else rec.smP += PRESSURE_SMOOTH_ALPHA * (raw - rec.smP);
+  return rec.smP;
 }
