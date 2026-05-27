@@ -161,10 +161,14 @@ export class Board {
     const r2 = r * r;
     const hits = [];
     for (const s of this.strokes) {
-      // bbox 快筛
+      // bbox 快筛 (text 块只用 bbox 命中，不做更精细测试)
       if (wx < s.bbox[0] - r || wx > s.bbox[2] + r ||
           wy < s.bbox[1] - r || wy > s.bbox[3] + r) continue;
-      // 逐段精测
+      if (s.type === "text") {
+        hits.push(s);
+        continue;
+      }
+      // 手写笔画：逐段精测
       const p = s.points;
       const N = p.length / 3;
       let hit = false;
@@ -242,6 +246,7 @@ export class Board {
     const wView = this._worldViewport();
 
     for (const s of this.strokes) {
+      if (s.type === "text") continue;            // 文字块走 DOM 浮层
       if (!aabbIntersect(s.bbox, wView)) continue;
       this._drawStroke(s);
     }

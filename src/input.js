@@ -41,7 +41,7 @@ const STROKE_SMOOTH_ALPHA = 0.65;
 const PRESSURE_SMOOTH_ALPHA = 0.4;
 
 export class InputController {
-  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, status } = {}) {
+  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, onTextPlace, status } = {}) {
     this.board = board;
     this.canvas = board.canvas;
     this.onChange = onChange || (() => {});
@@ -49,6 +49,7 @@ export class InputController {
     this.getColor = getColor || (() => "ink");
     this.getWidth = getWidth || (() => 2.2);
     this.getPressureEnabled = getPressureEnabled || (() => false);
+    this.onTextPlace = onTextPlace || (() => {});
     this.status = status || (() => {});
 
     this.pointers = new Map();    // pointerId → {pointerType, role, x, y, pressure, startX, startY}
@@ -123,6 +124,15 @@ export class InputController {
       }
       this.pointers.set(e.pointerId, { pointerType: e.pointerType, role: "gesture", x, y });
       this._beginGesture();
+      e.preventDefault();
+      return;
+    }
+
+    // 文字工具：单次 pointerdown = 在空白处落 textbox。
+    // 击中已有文字块由浮层 div 自己的 pointerdown 拦截 (stopPropagation)，
+    // 走到这里的都是真空白。
+    if (tool === "text") {
+      this.onTextPlace(x, y);
       e.preventDefault();
       return;
     }
@@ -411,6 +421,7 @@ export class InputController {
     if (e.key === "p" || e.key === "P") this._emitTool("pen");
     else if (e.key === "e" || e.key === "E") this._emitTool("eraser");
     else if (e.key === "h" || e.key === "H") this._emitTool("hand");
+    else if (e.key === "t" || e.key === "T") this._emitTool("text");
     else if (e.key === "g" || e.key === "G") this._emitGridCycle();
     else if (e.key === "0") this.board.resetViewport();
     else if (e.key === "=" || e.key === "+") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.2);

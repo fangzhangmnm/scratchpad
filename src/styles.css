@@ -72,6 +72,69 @@ html, body {
 body[data-tool="hand"] .board { cursor: grab; }
 body[data-panning="1"] .board { cursor: grabbing !important; }
 body[data-tool="eraser"] .board { cursor: cell; }
+body[data-tool="text"] .board { cursor: text; }
+
+/* ---- 文字 + LaTeX 浮层 ---- */
+.text-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;                 /* 在 canvas 之上、顶栏之下 */
+}
+.text-overlay-inner {
+  position: absolute;
+  top: 0; left: 0;
+  transform-origin: 0 0;       /* viewport transform 从这施加 */
+}
+.text-stroke {
+  position: absolute;
+  top: 0; left: 0;
+  transform-origin: 0 0;
+  font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 600px;            /* 防极长行；用户用 \n / 多 box 切 */
+  color: var(--ink);
+  pointer-events: none;
+}
+body[data-tool="text"] .text-stroke {
+  pointer-events: auto;
+  cursor: pointer;
+}
+body[data-tool="text"] .text-stroke:hover {
+  outline: 1px dashed var(--accent);
+  outline-offset: 4px;
+}
+.text-stroke .katex { font-size: 1.1em; }
+.text-stroke .katex-display { margin: 0.3em 0; }
+.text-stroke-err {
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.text-editor-wrap {
+  position: fixed;
+  z-index: 30;
+  transform-origin: 0 0;
+}
+.text-editor {
+  display: block;
+  min-width: 220px;
+  min-height: 60px;
+  max-width: 60vw;
+  max-height: 50vh;
+  padding: 8px 10px;
+  font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  outline: none;
+  resize: both;
+  box-shadow: var(--shadow);
+}
+.text-editor::placeholder { color: var(--ink-soft); font-size: 12px; }
 
 /* Top bar — 浮动毛玻璃 */
 .top-bar {

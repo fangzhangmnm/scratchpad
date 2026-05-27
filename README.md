@@ -15,6 +15,7 @@
 - ✅ Apple Pencil 防误触（设备一旦见过 pen，touch 全部转 pan）
 - ✅ Apple Pencil 屏幕双击 → 笔 ↔ 橡皮（barrel-tap 没法走 web，所以用 screen 双击代替）
 - ✅ 变宽填充丝带渲染（quadratic 中点平滑，避免 per-segment stroke 的狗牙）
+- ✅ 文字 + LaTeX 块（T 键 / `T` 工具按钮）：纯文字 + inline `$x^2$` 或 display `$$\sum$$`，回车提交，Shift+Enter 换行，Esc 取消。点已有块即编辑。KaTeX 本地 vendor，离线可用。橡皮 / 撤销 / 清空 / 导出都自动兼容
 - ✅ 多档网格：无 / 点阵 / 方格 / 横线（按 G 循环）
 - ✅ IndexedDB 持久化 — 重开即恢复
 - ✅ 阅后即焚（一键清空，二级确认）

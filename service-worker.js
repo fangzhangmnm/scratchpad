@@ -8,7 +8,7 @@
 // 的 V8 bytecode cache (按 URL 索引，URL 没变就用旧 bytecode，即使 SW 返回了
 // 新内容也忽略)。详见 docs/pointer-and-pen-input.md / WebPaint 同款问题。
 
-const CACHE_VERSION = "v8-2026-05-24";
+const CACHE_VERSION = "v9-2026-05-27";
 const CACHE_NAME = `scratchpad-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -25,7 +25,31 @@ const PRECACHE_URLS = [
   "./src/input.js",
   "./src/db.js",
   "./src/export.js",
+  "./src/textbox.js",
   "./src/vendor/jspdf.umd.min.js",
+  // KaTeX vendor (懒加载，但 SW 预缓存：装 PWA 第一次就能离线用文字)
+  "./src/vendor/katex/katex.min.js",
+  "./src/vendor/katex/katex.min.css",
+  "./src/vendor/katex/fonts/KaTeX_AMS-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Main-Bold.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Main-Italic.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Main-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Math-Italic.woff2",
+  "./src/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2",
+  "./src/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2",
+  "./src/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Script-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Size1-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Size2-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Size3-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Size4-Regular.woff2",
+  "./src/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2",
 ];
 
 // .js module 走 import-URL 改写。vendor/ 是 UMD 不用改 (没有 ES import)。

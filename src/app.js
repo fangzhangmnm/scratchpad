@@ -7,6 +7,7 @@ import {
   exportPngCurrentView, exportPngAll, exportPdfAll,
   copyPngCurrentView, sharePngAll, isShareSupported,
 } from "./export.js";
+import { TextManager, ensureKatex } from "./textbox.js";
 
 const THEMES = ["auto", "day", "night"];
 const THEME_LABEL = { auto: "跟随系统", day: "日", night: "夜" };
@@ -36,6 +37,9 @@ const els = {
   updateToast: document.getElementById("updateToast"),
   updateReload: document.getElementById("updateToastReload"),
   updateDismiss: document.getElementById("updateToastDismiss"),
+  textOverlayInner: document.getElementById("textOverlayInner"),
+  textEditorWrap: document.getElementById("textEditorWrap"),
+  textEditor: document.getElementById("textEditor"),
 };
 
 function safeLS(key, fallback) {
@@ -51,6 +55,16 @@ const state = {
 
 const board = new Board(els.board);
 
+const textManager = new TextManager(board, {
+  overlayInner: els.textOverlayInner,
+  editor: els.textEditor,
+  editorWrap: els.textEditorWrap,
+  getColor: () => state.color,
+  getInkColor: () => readCssColor("--ink"),
+  onAdd: (s) => { input._pushUndo({ type: "add", strokes: [s] }); setStatus("文字 · 已添加"); },
+  onDelete: (s) => { input._pushUndo({ type: "erase", strokes: [s] }); setStatus("文字 · 已删除"); },
+});
+
 // 主题
 function readCssColor(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -61,6 +75,7 @@ function applyThemeColorsToBoard() {
     bg: readCssColor("--bg"),
     line: readCssColor("--line"),
   });
+  textManager.refreshThemeColors();
 }
 
 let theme = localStorage.getItem("scratchpad.theme") || "auto";
@@ -83,6 +98,8 @@ function setTool(t) {
   state.tool = t;
   for (const b of els.toolBtns) b.setAttribute("aria-pressed", b.dataset.tool === t ? "true" : "false");
   document.body.dataset.tool = t;
+  // 切到文字 → 后台懒加载 KaTeX (空载也安全)
+  if (t === "text") ensureKatex().catch((err) => { console.error(err); setStatus("KaTeX 加载失败"); });
 }
 for (const b of els.toolBtns) {
   b.addEventListener("click", () => setTool(b.dataset.tool));
@@ -212,6 +229,7 @@ els.clearSheet.addEventListener("click", async (e) => {
   if (a !== "confirm") return;
   await clearAll();
   board.setStrokes([]);
+  textManager.renderAll();          // 文字浮层也清空
   input.clearHistory();
   setStatus("已烧掉");
 });
@@ -237,10 +255,12 @@ function setStatus(text, persist = false) {
   }
 }
 
-// hook board render → 更新 HUD (轻量)
+// hook board render → 同步文字浮层 viewport transform / DOM 对账 + 更新 HUD
 const origRender = board.render.bind(board);
 board.render = function () {
   origRender();
+  textManager.updateOverlayTransform();
+  textManager.syncOverlay();
   updateZoomLabel();
 };
 
@@ -250,6 +270,7 @@ const input = new InputController(board, {
   getColor: () => state.color,
   getWidth: () => state.width,
   getPressureEnabled: () => state.pressureEnabled,
+  onTextPlace: (sx, sy) => textManager.openEditor({ sx, sy }),
   onChange: () => {},
   status: setStatus,
 });
@@ -259,8 +280,14 @@ const input = new InputController(board, {
   setStatus("加载中…", true);
   try {
     const strokes = await loadAllStrokes();
+    // 有 text 笔画就先把 KaTeX 拉起来，渲染浮层
+    if (strokes.some((s) => s.type === "text")) {
+      await ensureKatex();
+    }
     board.setStrokes(strokes);
     await board.restoreViewport();
+    textManager.renderAll();
+    textManager.updateOverlayTransform();
     refreshGridLabel();
     updateZoomLabel();
     setStatus(strokes.length ? `已加载 ${strokes.length} 笔` : "新草稿");

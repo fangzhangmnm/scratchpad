@@ -1,4 +1,5 @@
 import { drawStroke } from "./board.js";
+import { renderHtml as renderTextHtml } from "./textbox.js";
 
 // 导出 PNG / PDF / 复制到剪贴板 / Web Share。
 //
@@ -45,7 +46,7 @@ export async function exportPdfAll(board, fileName = "scratchpad.pdf") {
   const off = document.createElement("canvas");
   off.width = w; off.height = h;
   const ctx = off.getContext("2d", { alpha: false });
-  renderOffscreen(board, ctx, {
+  await renderOffscreen(board, ctx, {
     width: w, height: h,
     tx: (-bb.x0 + pad) * pxPerUnit,
     ty: (-bb.y0 + pad) * pxPerUnit,
@@ -114,7 +115,7 @@ async function renderCurrentViewBlob(board) {
   off.width = Math.round(w * PNG_DPI);
   off.height = Math.round(h * PNG_DPI);
   const ctx = off.getContext("2d", { alpha: false });
-  renderOffscreen(board, ctx, {
+  await renderOffscreen(board, ctx, {
     width: off.width,
     height: off.height,
     tx: board.viewport.tx * PNG_DPI,
@@ -138,7 +139,7 @@ async function renderAllBlob(board) {
   const off = document.createElement("canvas");
   off.width = w; off.height = h;
   const ctx = off.getContext("2d", { alpha: false });
-  renderOffscreen(board, ctx, {
+  await renderOffscreen(board, ctx, {
     width: w, height: h,
     tx: (-bb.x0 + pad) * pxPerUnit,
     ty: (-bb.y0 + pad) * pxPerUnit,
@@ -147,14 +148,70 @@ async function renderAllBlob(board) {
   return toBlob(off, "image/png");
 }
 
-function renderOffscreen(board, ctx, opts) {
+async function renderOffscreen(board, ctx, opts) {
   const { width, height, tx, ty, scale } = opts;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = board._bgColor;
   ctx.fillRect(0, 0, width, height);
   const viewport = { tx, ty, scale };
   for (const s of board.strokes) {
+    if (s.type === "text") continue;   // 先画手写笔画，文字 / LaTeX 块最后叠上
     drawStroke(ctx, s, viewport, board._inkColor);
+  }
+  // 文字块走 SVG foreignObject → image → canvas (并行加载)
+  const textStrokes = board.strokes.filter((s) => s.type === "text");
+  if (textStrokes.length) {
+    const inkColor = board._inkColor;
+    await Promise.all(textStrokes.map((s) =>
+      rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor)
+    ));
+  }
+}
+
+// 把一个 text stroke 渲染成 PNG 叠到 ctx 上。
+// 走 SVG <foreignObject> 包 KaTeX 输出的 HTML → Image → drawImage。
+// 字体走浏览器默认 fallback (KaTeX woff2 不会被 SVG image 通道加载)；
+// 数学符号大体能认，要 1:1 复刻请直接截图分享。
+async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor) {
+  const html = (() => {
+    try { return renderTextHtml(s.source); }
+    catch { return s.source.replace(/[<>&]/g, ""); }
+  })();
+  const color = s.color === "ink" ? inkColor : s.color;
+  const fontFamily = '-apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif';
+
+  // 用 stroke.bbox 反推 1:1 大小 (offsetWidth/Height 当时存的就是 CSS px = world unit)
+  const bw = Math.max(1, Math.ceil(s.bbox[2] - s.bbox[0]));
+  const bh = Math.max(1, Math.ceil(s.bbox[3] - s.bbox[1]));
+  const renderW = Math.max(1, Math.ceil(bw * scale));
+  const renderH = Math.max(1, Math.ceil(bh * scale));
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
+    `<foreignObject width="${renderW}" height="${renderH}">` +
+      `<div xmlns="http://www.w3.org/1999/xhtml" style="` +
+        `font:14px/1.5 ${fontFamily};color:${color};white-space:pre-wrap;word-break:break-word;` +
+        `width:${bw}px;transform:scale(${scale});transform-origin:0 0;` +
+      `">${html}</div>` +
+    `</foreignObject></svg>`;
+
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const sx = s.x * scale + tx;
+        const sy = s.y * scale + ty;
+        ctx.drawImage(img, sx, sy);
+        resolve();
+      };
+      img.onerror = () => reject(new Error("text stroke svg image load failed"));
+      img.src = url;
+    });
+  } catch (e) {
+    console.warn("text stroke export failed", e);
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
