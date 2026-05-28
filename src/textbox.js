@@ -137,21 +137,83 @@ export class TextManager {
     el.className = "text-stroke";
     el.style.transform = `translate(${s.x}px, ${s.y}px)`;
     el.style.color = s.color === "ink" ? this.getInkColor() : s.color;
+    // 用户在 editor 里 resize 过 → 固定 width；否则 pre 自然撑开
+    if (s.width && s.width > 0) {
+      el.style.width = s.width + "px";
+    } else {
+      el.style.whiteSpace = "pre";       // 单笔 override CSS 默认的 pre-wrap
+    }
     el.dataset.strokeId = s.id ?? "";
     try {
       el.innerHTML = renderHtml(s.source);
     } catch (e) {
       el.innerHTML = `<span class="text-stroke-err">${escapeHtml(s.source)}</span>`;
     }
-    el.addEventListener("pointerdown", (e) => {
-      // 只在 text 工具下接管，其他工具下 CSS pointer-events:none 不会到这里
-      e.stopPropagation();
-      this.openEditor(s);
-    });
+    this._bindStrokeHandlers(el, s);
     this.overlayInner.appendChild(el);
     this.elById.set(s.id, el);
     // bbox: offsetWidth/Height 不受 transform 影响，等于 1:1 scale 下的 CSS px
     s.bbox = [s.x, s.y, s.x + el.offsetWidth, s.y + el.offsetHeight];
+  }
+
+  // 拖 = 移动；点击 (无移动) = 编辑
+  _bindStrokeHandlers(el, s) {
+    const DRAG_THRESHOLD_SQ = 16;   // 4 px²；超过就当拖动
+    let pid = null;
+    let startX = 0, startY = 0;     // 屏幕坐标
+    let originX = s.x, originY = s.y;
+    let moved = false;
+
+    el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      pid = e.pointerId;
+      startX = e.clientX; startY = e.clientY;
+      originX = s.x; originY = s.y;
+      moved = false;
+      el.setPointerCapture?.(pid);
+    });
+
+    el.addEventListener("pointermove", (e) => {
+      if (e.pointerId !== pid) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!moved && dx * dx + dy * dy < DRAG_THRESHOLD_SQ) return;
+      moved = true;
+      el.classList.add("dragging");
+      // 屏幕位移转世界位移：除以 viewport.scale
+      const scale = this.board.viewport.scale;
+      s.x = originX + dx / scale;
+      s.y = originY + dy / scale;
+      el.style.transform = `translate(${s.x}px, ${s.y}px)`;
+      // bbox 跟着挪 (宽高不变)
+      const w = s.bbox[2] - s.bbox[0];
+      const h = s.bbox[3] - s.bbox[1];
+      s.bbox = [s.x, s.y, s.x + w, s.y + h];
+    });
+
+    el.addEventListener("pointerup", (e) => {
+      if (e.pointerId !== pid) return;
+      el.releasePointerCapture?.(pid);
+      pid = null;
+      el.classList.remove("dragging");
+      if (moved) {
+        // 拖完了，持久化新位置
+        putStrokeWithId(s).catch((err) => console.error("text move save failed", err));
+      } else {
+        // 没动 = 点击 → 编辑
+        this.openEditor(s);
+      }
+    });
+
+    el.addEventListener("pointercancel", () => {
+      if (pid != null) {
+        el.releasePointerCapture?.(pid);
+        pid = null;
+      }
+      el.classList.remove("dragging");
+      // 不撤回位移 (用户体验上拖到哪算哪)；如果有动了，存一下
+      if (moved) putStrokeWithId(s).catch(() => {});
+    });
   }
 
   removeStrokeFromOverlay(strokeId) {
@@ -194,6 +256,13 @@ export class TextManager {
 
     this.editing = { stroke, sx, sy, isNew: !stroke };
     this.editor.value = stroke ? stroke.source : "";
+    // 老笔记保存过 width 就回填 textarea 宽度 (允许继续 resize)；否则清掉
+    if (stroke && stroke.width && stroke.width > 0) {
+      this.editor.style.width = stroke.width + "px";
+    } else {
+      this.editor.style.width = "";
+    }
+    this.editor.style.height = "";    // 高度让用户重新拖；空内容启动时按 min-height
     this.editorWrap.style.left = `${sx}px`;
     this.editorWrap.style.top = `${sy}px`;
     this.editorWrap.classList.remove("hidden");
@@ -235,6 +304,11 @@ export class TextManager {
     const newSource = this.editor.value;          // 不 trim，前后空白让用户排版
     const trimmed = newSource.trim();
 
+    // 用户拖手柄改宽了的话，记录下来。0 / 跟默认一致 → 不存 width (走自然宽度)
+    const editorW = this.editor.offsetWidth;
+    const defaultMinW = parseFloat(getComputedStyle(this.editor).minWidth) || 220;
+    const newWidth = editorW > defaultMinW + 4 ? editorW : 0;   // 4 px 浮点容差
+
     // 隐藏编辑器 + 还原 edit target 的 visibility (≈ _closeEditor 的副作用)
     this.editorWrap.classList.add("hidden");
     if (session.stroke) {
@@ -250,6 +324,7 @@ export class TextManager {
         x: wx, y: wy,
         source: newSource,
         color: this.getColor(),
+        width: newWidth,
         bbox: [wx, wy, wx, wy],
       };
       try {
@@ -275,9 +350,11 @@ export class TextManager {
       }
       return;
     }
-    if (newSource === existing.source) return;
+    if (newSource === existing.source && newWidth === (existing.width || 0)) return;
     const oldSource = existing.source;
+    const oldWidth = existing.width;
     existing.source = newSource;
+    existing.width = newWidth;
     try {
       await putStrokeWithId(existing);
       this.removeStrokeFromOverlay(existing.id);
@@ -285,6 +362,7 @@ export class TextManager {
     } catch (err) {
       console.error("text update failed", err);
       existing.source = oldSource;
+      existing.width = oldWidth;
     }
   }
 }

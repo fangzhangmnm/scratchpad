@@ -186,10 +186,14 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor) {
   const renderW = Math.max(1, Math.ceil(bw * scale));
   const renderH = Math.max(1, Math.ceil(bh * scale));
 
+  // 跟 live render 同 CSS：有 width → pre-wrap 在那个宽度断行；没有 → pre 自然撑
+  const widthCss = s.width && s.width > 0
+    ? `width:${s.width}px;white-space:pre-wrap;word-break:break-word;`
+    : `white-space:pre;`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
     `<foreignObject width="${renderW}" height="${renderH}">` +
       `<div xmlns="http://www.w3.org/1999/xhtml" style="` +
-        `font:14px/1.5 ${fontFamily};color:${color};white-space:pre;` +
+        `font:14px/1.5 ${fontFamily};color:${color};${widthCss}` +
         `transform:scale(${scale});transform-origin:0 0;` +
       `">${html}</div>` +
     `</foreignObject></svg>`;
