@@ -189,8 +189,8 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
     `<foreignObject width="${renderW}" height="${renderH}">` +
       `<div xmlns="http://www.w3.org/1999/xhtml" style="` +
-        `font:14px/1.5 ${fontFamily};color:${color};white-space:pre-wrap;word-break:break-word;` +
-        `width:${bw}px;transform:scale(${scale});transform-origin:0 0;` +
+        `font:14px/1.5 ${fontFamily};color:${color};white-space:pre;` +
+        `transform:scale(${scale});transform-origin:0 0;` +
       `">${html}</div>` +
     `</foreignObject></svg>`;
 

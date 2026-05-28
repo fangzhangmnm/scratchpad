@@ -92,9 +92,9 @@ body[data-tool="text"] .board { cursor: text; }
   top: 0; left: 0;
   transform-origin: 0 0;
   font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-width: 600px;            /* 防极长行；用户用 \n / 多 box 切 */
+  /* containing block = .text-overlay-inner，没固定宽度→pre-wrap 会塞到 0 宽。
+     一律 pre 不自动换行；用户要换行 Shift+Enter，要分块就再开一个 textbox。*/
+  white-space: pre;
   color: var(--ink);
   pointer-events: none;
 }
