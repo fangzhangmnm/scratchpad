@@ -271,6 +271,7 @@ const input = new InputController(board, {
   getWidth: () => state.width,
   getPressureEnabled: () => state.pressureEnabled,
   onTextPlace: (rect) => textManager.openEditor(rect),
+  onTextDismiss: () => textManager.dismissIfEmpty(),
   onChange: () => {},
   status: setStatus,
 });

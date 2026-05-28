@@ -41,7 +41,7 @@ const STROKE_SMOOTH_ALPHA = 0.65;
 const PRESSURE_SMOOTH_ALPHA = 0.4;
 
 export class InputController {
-  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, onTextPlace, status } = {}) {
+  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, onTextPlace, onTextDismiss, status } = {}) {
     this.board = board;
     this.canvas = board.canvas;
     this.onChange = onChange || (() => {});
@@ -50,6 +50,7 @@ export class InputController {
     this.getWidth = getWidth || (() => 2.2);
     this.getPressureEnabled = getPressureEnabled || (() => false);
     this.onTextPlace = onTextPlace || (() => {});
+    this.onTextDismiss = onTextDismiss || (() => {});
     this.status = status || (() => {});
 
     this.pointers = new Map();    // pointerId → {pointerType, role, x, y, pressure, startX, startY}
@@ -254,16 +255,19 @@ export class InputController {
     }
 
     if (rec.role === "text-create") {
-      // 收尾：drag 够大 → 把屏幕矩形交给 onTextPlace；小到几乎是点击 → 默默放弃
+      // 收尾：drag 够大 → 把屏幕矩形交给 onTextPlace；
+      //       小到几乎是点击 → 默默放弃，同时如果挂着一个空 editor 也一起关掉
       if (this._textDraft) this._textDraft.classList.add("hidden");
       const x0 = Math.min(rec.startX, rec.x);
       const y0 = Math.min(rec.startY, rec.y);
       const x1 = Math.max(rec.startX, rec.x);
       const y1 = Math.max(rec.startY, rec.y);
       const sw = x1 - x0, sh = y1 - y0;
-      const MIN_DRAG = 24;     // px — 低于这个就当点击丢弃
+      const MIN_DRAG = 24;
       if (sw >= MIN_DRAG || sh >= MIN_DRAG) {
         this.onTextPlace({ sx: x0, sy: y0, sw: Math.max(sw, 60), sh: Math.max(sh, 24) });
+      } else {
+        this.onTextDismiss();
       }
       return;
     }

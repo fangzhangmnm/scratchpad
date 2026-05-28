@@ -1,5 +1,5 @@
 import { drawStroke } from "./board.js";
-import { renderHtml as renderTextHtml } from "./textbox.js";
+import { renderHtml as renderTextHtml, ensureKatex, getKatexFullCss } from "./textbox.js";
 
 // 导出 PNG / PDF / 复制到剪贴板 / Web Share。
 //
@@ -162,17 +162,20 @@ async function renderOffscreen(board, ctx, opts) {
   const textStrokes = board.strokes.filter((s) => s.type === "text");
   if (textStrokes.length) {
     const inkColor = board._inkColor;
+    // KaTeX + 字体 CSS 都拉好；外层 await 是为了缓存预热，子调用并行用结果
+    await ensureKatex().catch(() => {});
+    const fontCss = await getKatexFullCss().catch(() => "");
     await Promise.all(textStrokes.map((s) =>
-      rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor)
+      rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss)
     ));
   }
 }
 
 // 把一个 text stroke 渲染成 PNG 叠到 ctx 上。
 // 走 SVG <foreignObject> 包 KaTeX 输出的 HTML → Image → drawImage。
-// 字体走浏览器默认 fallback (KaTeX woff2 不会被 SVG image 通道加载)；
-// 数学符号大体能认，要 1:1 复刻请直接截图分享。
-async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor) {
+// SVG 头里嵌入完整 katex.min.css (字体 woff2 都已 base64 化) → foreignObject
+// 渲染时拿到的字体跟 live view 完全一致，数学符号 1:1 准。
+async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss) {
   const html = (() => {
     try { return renderTextHtml(s.source); }
     catch { return s.source.replace(/[<>&]/g, ""); }
@@ -190,7 +193,11 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor) {
   const widthCss = s.width && s.width > 0
     ? `width:${s.width}px;white-space:pre-wrap;word-break:break-word;`
     : `white-space:pre;`;
+  const styleBlock = fontCss
+    ? `<style type="text/css"><![CDATA[${fontCss}]]></style>`
+    : ``;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
+    styleBlock +
     `<foreignObject width="${renderW}" height="${renderH}">` +
       `<div xmlns="http://www.w3.org/1999/xhtml" style="` +
         `font:14px/1.5 ${fontFamily};color:${color};${widthCss}` +
