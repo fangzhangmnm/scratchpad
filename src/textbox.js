@@ -243,26 +243,26 @@ export class TextManager {
     if (this.editing) await this._commit();   // 之前的先收完整
     await ensureKatex();                       // 渲染要 KaTeX
 
-    let stroke = null, sx, sy;
+    const scale = this.board.viewport.scale;
+    let stroke = null, sx, sy, sw = 0, sh = 0;
     if (arg && arg.type === "text") {
       stroke = arg;
       const sp = this.board.worldToScreen(stroke.x, stroke.y);
       sx = sp.x; sy = sp.y;
+      // 把世界宽度转回屏幕宽度，editor 才能"长得"跟最终渲染一样宽
+      if (stroke.width && stroke.width > 0) sw = stroke.width * scale;
       const el = this.elById.get(stroke.id);
       if (el) el.style.visibility = "hidden";
     } else {
       sx = arg.sx; sy = arg.sy;
+      sw = arg.sw || 0;
+      sh = arg.sh || 0;
     }
 
     this.editing = { stroke, sx, sy, isNew: !stroke };
     this.editor.value = stroke ? stroke.source : "";
-    // 老笔记保存过 width 就回填 textarea 宽度 (允许继续 resize)；否则清掉
-    if (stroke && stroke.width && stroke.width > 0) {
-      this.editor.style.width = stroke.width + "px";
-    } else {
-      this.editor.style.width = "";
-    }
-    this.editor.style.height = "";    // 高度让用户重新拖；空内容启动时按 min-height
+    this.editor.style.width = sw > 0 ? sw + "px" : "";
+    this.editor.style.height = sh > 0 ? sh + "px" : "";
     this.editorWrap.style.left = `${sx}px`;
     this.editorWrap.style.top = `${sy}px`;
     this.editorWrap.classList.remove("hidden");
@@ -304,10 +304,12 @@ export class TextManager {
     const newSource = this.editor.value;          // 不 trim，前后空白让用户排版
     const trimmed = newSource.trim();
 
-    // 用户拖手柄改宽了的话，记录下来。0 / 跟默认一致 → 不存 width (走自然宽度)
+    // editor 是屏幕 px；存 stroke.width 是世界 px (跟 x/y/bbox 同坐标系)。
+    // 用户拖小于 min-width + 容差 → 视为没有定宽 (回退到自然 pre 渲染)
+    const scale = this.board.viewport.scale || 1;
     const editorW = this.editor.offsetWidth;
-    const defaultMinW = parseFloat(getComputedStyle(this.editor).minWidth) || 220;
-    const newWidth = editorW > defaultMinW + 4 ? editorW : 0;   // 4 px 浮点容差
+    const defaultMinW = parseFloat(getComputedStyle(this.editor).minWidth) || 80;
+    const newWidth = editorW > defaultMinW + 4 ? editorW / scale : 0;   // 4 px 浮点容差
 
     // 隐藏编辑器 + 还原 edit target 的 visibility (≈ _closeEditor 的副作用)
     this.editorWrap.classList.add("hidden");

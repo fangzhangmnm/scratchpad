@@ -270,7 +270,7 @@ const input = new InputController(board, {
   getColor: () => state.color,
   getWidth: () => state.width,
   getPressureEnabled: () => state.pressureEnabled,
-  onTextPlace: (sx, sy) => textManager.openEditor({ sx, sy }),
+  onTextPlace: (rect) => textManager.openEditor(rect),
   onChange: () => {},
   status: setStatus,
 });

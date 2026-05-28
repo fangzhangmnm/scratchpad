@@ -61,8 +61,11 @@
     <!-- 编辑器：纯 textarea，回车 commit，Shift+Enter 换行，Esc 取消 -->
     <div id="textEditorWrap" class="text-editor-wrap hidden">
       <textarea id="textEditor" class="text-editor" spellcheck="false"
-        placeholder="文字 + LaTeX （$inline$ / $$display$$） · Enter 提交 / Shift+Enter 换行 / Esc 取消"></textarea>
+        placeholder="文字 + LaTeX · Enter 提交"></textarea>
     </div>
+
+    <!-- T 工具按下拖动时的预览矩形 -->
+    <div id="textDraftRect" class="text-draft-rect hidden" aria-hidden="true"></div>
 
     <!-- 顶栏：工具 + 状态 -->
     <header class="top-bar" id="topBar">

@@ -125,21 +125,33 @@ body[data-tool="text"] .text-stroke:hover {
 }
 .text-editor {
   display: block;
-  min-width: 220px;
-  min-height: 60px;
-  max-width: 60vw;
-  max-height: 50vh;
-  padding: 8px 10px;
+  min-width: 80px;             /* 拖出来的框可以很窄；放宽 */
+  min-height: 24px;            /* 一行 */
+  max-width: 80vw;
+  max-height: 70vh;
+  padding: 0;                   /* 关键：编辑器和渲染后的字位置必须一致 */
+  margin: 0;
+  border: 0;
   font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
   color: var(--ink);
   background: var(--bg);
-  border: 2px dashed var(--accent);
-  border-radius: 8px;
-  outline: none;
+  outline: 2px dashed var(--accent);    /* outline 不占布局，画在外面 */
+  outline-offset: 0;
   resize: both;
   box-shadow: var(--shadow);
+  overflow: auto;
 }
-.text-editor::placeholder { color: var(--ink-soft); font-size: 12px; }
+.text-editor::placeholder { color: var(--ink-soft); font-size: 11px; opacity: 0.7; }
+
+/* 拖动 T 工具时画的虚线框，松手才落 editor */
+.text-draft-rect {
+  position: fixed;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  pointer-events: none;
+  z-index: 28;
+}
+.text-draft-rect.hidden { display: none; }
 
 /* Top bar — 浮动毛玻璃 */
 .top-bar {

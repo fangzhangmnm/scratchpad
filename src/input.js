@@ -128,11 +128,19 @@ export class InputController {
       return;
     }
 
-    // 文字工具：单次 pointerdown = 在空白处落 textbox。
+    // 文字工具：拖矩形定 textbox 边界，松手才弹 editor。点击 (< 阈值) = 无操作。
     // 击中已有文字块由浮层 div 自己的 pointerdown 拦截 (stopPropagation)，
     // 走到这里的都是真空白。
     if (tool === "text") {
-      this.onTextPlace(x, y);
+      this.pointers.set(e.pointerId, {
+        pointerType: e.pointerType,
+        role: "text-create",
+        x, y, startX: x, startY: y,
+        downTime: performance.now(),
+      });
+      this.canvas.setPointerCapture?.(e.pointerId);
+      this._textDraft = document.getElementById("textDraftRect");
+      this._updateTextDraft(x, y, x, y, true);
       e.preventDefault();
       return;
     }
@@ -194,6 +202,12 @@ export class InputController {
       return;
     }
 
+    if (rec.role === "text-create") {
+      this._updateTextDraft(rec.startX, rec.startY, rec.x, rec.y, false);
+      e.preventDefault();
+      return;
+    }
+
     if (rec.role === "draw") {
       // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
@@ -236,6 +250,21 @@ export class InputController {
     if (rec.role === "gesture") {
       if (this.pointers.size < 2) this._endGesture();
       else this._beginGesture();
+      return;
+    }
+
+    if (rec.role === "text-create") {
+      // 收尾：drag 够大 → 把屏幕矩形交给 onTextPlace；小到几乎是点击 → 默默放弃
+      if (this._textDraft) this._textDraft.classList.add("hidden");
+      const x0 = Math.min(rec.startX, rec.x);
+      const y0 = Math.min(rec.startY, rec.y);
+      const x1 = Math.max(rec.startX, rec.x);
+      const y1 = Math.max(rec.startY, rec.y);
+      const sw = x1 - x0, sh = y1 - y0;
+      const MIN_DRAG = 24;     // px — 低于这个就当点击丢弃
+      if (sw >= MIN_DRAG || sh >= MIN_DRAG) {
+        this.onTextPlace({ sx: x0, sy: y0, sw: Math.max(sw, 60), sh: Math.max(sh, 24) });
+      }
       return;
     }
 
@@ -301,6 +330,20 @@ export class InputController {
         delete document.body.dataset.panning;
       }
     }
+  }
+
+  // ---- text-create 矩形预览 ----
+  _updateTextDraft(x0, y0, x1, y1, show) {
+    if (!this._textDraft) this._textDraft = document.getElementById("textDraftRect");
+    const el = this._textDraft;
+    if (!el) return;
+    const l = Math.min(x0, x1);
+    const t = Math.min(y0, y1);
+    el.style.left = l + "px";
+    el.style.top = t + "px";
+    el.style.width = Math.abs(x1 - x0) + "px";
+    el.style.height = Math.abs(y1 - y0) + "px";
+    if (show) el.classList.remove("hidden");
   }
 
   // ---- gesture (2 finger pan + pinch) ----
