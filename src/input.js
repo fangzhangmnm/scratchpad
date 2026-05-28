@@ -442,14 +442,19 @@ export class InputController {
   }
 
   // ---- wheel ----
+  // wheel 的 deltaY 跨设备语义不统一：
+  //   trackpad pinch (macOS / 触控板)   → ctrlKey=true, deltaMode=0, |deltaY| 通常 1-20，每秒几十个 event
+  //   mouse wheel + ctrl              → ctrlKey=true, deltaMode 视浏览器 (Edge/Chrome=0 但 |dy|=100；FF=1)，每秒 1-3 个 tick
+  // 用 deltaMode + |deltaY| 量级判定，不同分支用不同 k。
+  // 阈值 80 是经验值 (鼠标 tick 至少 100，触控板单个 event 通常 < 20)。
   _wheel(e) {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      // pinch
-      const factor = Math.exp(-e.deltaY * 0.01);
+      const smooth = e.deltaMode === 0 && Math.abs(e.deltaY) < 80;
+      const k = smooth ? 0.003 : 0.001;
+      const factor = Math.exp(-e.deltaY * k);
       this.board.zoomAt(e.clientX, e.clientY, factor);
     } else {
-      // 平移
       let dx = -e.deltaX, dy = -e.deltaY;
       if (e.shiftKey && dx === 0) { dx = dy; dy = 0; }
       this.board.pan(dx, dy);

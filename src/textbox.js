@@ -32,46 +32,6 @@ export function ensureKatex() {
   return _katexPromise;
 }
 
-// ---- 导出用：把 KaTeX CSS + woff2 字体 base64 内嵌成一段自含 CSS ----
-// foreignObject 当 <img> 加载时不能 fetch 外部资源 (woff2 不会被请求)。
-// 把整张 katex.min.css 拉下来，所有 url(fonts/X.woff2) 替成 data: URL。
-// 缓存到模块单例，首次导出慢 (~100-300ms)，之后秒级。
-let _katexFullCssPromise = null;
-export function getKatexFullCss() {
-  if (_katexFullCssPromise) return _katexFullCssPromise;
-  _katexFullCssPromise = (async () => {
-    const cssResp = await fetch("./src/vendor/katex/katex.min.css");
-    let cssText = await cssResp.text();
-    const urlRegex = /url\(fonts\/([^)]+\.woff2)\)/g;
-    const unique = [...new Set([...cssText.matchAll(urlRegex)].map((m) => m[1]))];
-    const dataUrls = new Map();
-    await Promise.all(unique.map(async (fontFile) => {
-      try {
-        const resp = await fetch(`./src/vendor/katex/fonts/${fontFile}`);
-        const buf = await resp.arrayBuffer();
-        dataUrls.set(fontFile, `data:font/woff2;base64,${_arrayBufferToBase64(buf)}`);
-      } catch (e) {
-        console.warn("font fetch failed", fontFile, e);
-      }
-    }));
-    return cssText.replace(urlRegex, (full, fontFile) => {
-      const u = dataUrls.get(fontFile);
-      return u ? `url(${u})` : full;
-    });
-  })();
-  return _katexFullCssPromise;
-}
-
-function _arrayBufferToBase64(buf) {
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
 // ---- source 解析 (text + $..$ + $$..$$) ----
 // 简单状态机：先看 $$，再看 $。未闭合的 $ 当字面量。
 export function parseSource(source) {

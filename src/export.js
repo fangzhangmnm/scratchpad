@@ -1,5 +1,5 @@
 import { drawStroke } from "./board.js";
-import { renderHtml as renderTextHtml, ensureKatex, getKatexFullCss } from "./textbox.js";
+import { renderHtml as renderTextHtml, ensureKatex } from "./textbox.js";
 
 // 导出 PNG / PDF / 复制到剪贴板 / Web Share。
 //
@@ -158,24 +158,24 @@ async function renderOffscreen(board, ctx, opts) {
     if (s.type === "text") continue;   // 先画手写笔画，文字 / LaTeX 块最后叠上
     drawStroke(ctx, s, viewport, board._inkColor);
   }
-  // 文字块走 SVG foreignObject → image → canvas (并行加载)
+  // 文字块走 html2canvas → 离屏临时 div → 像素 → drawImage 到导出 canvas
   const textStrokes = board.strokes.filter((s) => s.type === "text");
   if (textStrokes.length) {
     const inkColor = board._inkColor;
-    // KaTeX + 字体 CSS 都拉好；外层 await 是为了缓存预热，子调用并行用结果
     await ensureKatex().catch(() => {});
-    const fontCss = await getKatexFullCss().catch(() => "");
-    await Promise.all(textStrokes.map((s) =>
-      rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss)
-    ));
+    await ensureHtml2Canvas().catch(() => {});
+    // 串行而非并行：html2canvas 内部用临时 iframe，并行会互相干扰
+    for (const s of textStrokes) {
+      await rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor);
+    }
   }
 }
 
-// 把一个 text stroke 渲染成 PNG 叠到 ctx 上。
-// 走 SVG <foreignObject> 包 KaTeX 输出的 HTML → Image → drawImage。
-// SVG 头里嵌入完整 katex.min.css (字体 woff2 都已 base64 化) → foreignObject
-// 渲染时拿到的字体跟 live view 完全一致，数学符号 1:1 准。
-async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss) {
+// 把一个 text stroke 渲染成 PNG 叠到导出 ctx 上。
+// 用 html2canvas 走 DOM tree → 像素，不靠 SVG foreignObject 那套跨浏览器不稳的 hack。
+// 流程：建一个跟 live .text-stroke 同样 CSS 的离屏 div → html2canvas → drawImage。
+// WYSIWYG：div 用 1:1 自然字号渲染，scale 选项告诉 html2canvas 输出多少 DPI 像素。
+async function rasterizeTextStroke(s, ctx, exportTx, exportTy, exportScale, inkColor) {
   const html = (() => {
     try { return renderTextHtml(s.source); }
     catch { return s.source.replace(/[<>&]/g, ""); }
@@ -183,50 +183,54 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss) {
   const color = s.color === "ink" ? inkColor : s.color;
   const fontFamily = '-apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif';
 
-  // 用 stroke.bbox 反推 1:1 大小 (offsetWidth/Height 当时存的就是 CSS px = world unit)
-  const bw = Math.max(1, Math.ceil(s.bbox[2] - s.bbox[0]));
-  const bh = Math.max(1, Math.ceil(s.bbox[3] - s.bbox[1]));
-  const renderW = Math.max(1, Math.ceil(bw * scale));
-  const renderH = Math.max(1, Math.ceil(bh * scale));
+  // 离屏临时元素，跟 live .text-stroke 同样的 CSS
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:absolute;top:-99999px;left:0;pointer-events:none;";
+  const target = document.createElement("div");
+  target.style.font = `14px/1.5 ${fontFamily}`;
+  target.style.color = color;
+  if (s.width && s.width > 0) {
+    target.style.width = s.width + "px";
+    target.style.whiteSpace = "pre-wrap";
+    target.style.wordBreak = "break-word";
+  } else {
+    target.style.whiteSpace = "pre";
+  }
+  try { target.innerHTML = html; }
+  catch { target.textContent = s.source; }
+  wrap.appendChild(target);
+  document.body.appendChild(wrap);
 
-  // 跟 live render 同 CSS：有 width → pre-wrap 在那个宽度断行；没有 → pre 自然撑
-  const widthCss = s.width && s.width > 0
-    ? `width:${s.width}px;white-space:pre-wrap;word-break:break-word;`
-    : `white-space:pre;`;
-  // A1: <style> 放 foreignObject **内层 HTML 命名空间** — SVG 根 <style> 在
-  //     某些浏览器里不会 cascade 进 foreignObject 的 HTML 文档。放内层 100% 应用。
-  const styleBlock = fontCss
-    ? `<style xmlns="http://www.w3.org/1999/xhtml">${fontCss.replace(/<\/style>/gi, "")}</style>`
-    : ``;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
-      `<foreignObject width="${renderW}" height="${renderH}">` +
-        `<div xmlns="http://www.w3.org/1999/xhtml">` +
-          styleBlock +
-          `<div style="font:14px/1.5 ${fontFamily};color:${color};${widthCss}` +
-            `transform:scale(${scale});transform-origin:0 0;">${html}</div>` +
-        `</div>` +
-      `</foreignObject>` +
-    `</svg>`;
-
-  // A2: data URL 而不是 blob URL — Safari 在 blob-svg 含 foreignObject 时有渲染 bug。
-  // encodeURIComponent → 安全；不用 btoa 因为字体 base64 字符串里有非 ASCII 风险低但 URI 更稳。
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   try {
-    await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const sx = s.x * scale + tx;
-        const sy = s.y * scale + ty;
-        ctx.drawImage(img, sx, sy);
-        resolve();
-      };
-      img.onerror = () => reject(new Error("text stroke svg image load failed"));
-      img.src = url;
+    const bitmap = await window.html2canvas(target, {
+      backgroundColor: null,           // 透明
+      scale: exportScale,              // 直接出导出分辨率
+      logging: false,
+      useCORS: true,
     });
+    const px = s.x * exportScale + exportTx;
+    const py = s.y * exportScale + exportTy;
+    ctx.drawImage(bitmap, px, py);
   } catch (e) {
     console.warn("text stroke export failed", e);
+  } finally {
+    wrap.remove();
   }
+}
+
+// ---- html2canvas 懒加载 ----
+let _html2canvasPromise = null;
+function ensureHtml2Canvas() {
+  if (_html2canvasPromise) return _html2canvasPromise;
+  _html2canvasPromise = new Promise((resolve, reject) => {
+    if (window.html2canvas) { resolve(window.html2canvas); return; }
+    const s = document.createElement("script");
+    s.src = "./src/vendor/html2canvas/html2canvas.min.js";
+    s.onload = () => window.html2canvas ? resolve(window.html2canvas) : reject(new Error("html2canvas 没挂上 window"));
+    s.onerror = () => reject(new Error("html2canvas 加载失败"));
+    document.head.appendChild(s);
+  });
+  return _html2canvasPromise;
 }
 
 function toBlob(canvas, type) {
