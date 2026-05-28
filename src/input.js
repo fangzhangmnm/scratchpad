@@ -35,6 +35,10 @@ const DOUBLETAP_MAX_GAP = 80;     // 屏幕 px — 两次 tap 的位置容忍
 // 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
 const STROKE_SMOOTH_ALPHA = 0.65;
 
+// 点采样间距门限：相邻样本距离小于 (笔宽 × 因子) 屏幕 px 时跳过。
+// 笔宽 2.2 → 阈值 0.55 px；笔宽 12 → 阈值 3 px。够 ribbon 渲染平滑，省内存。
+const MIN_SAMPLE_DIST_FACTOR = 0.25;
+
 // 压感 LPF (stabilizer)。Pencil 自带 ~10Hz 握笔抖动 (手腕/食指生理频率) 灌进 size
 // 会让笔每秒 10 次缩胀 → 视觉结节 / mid-bulb。一阶 IIR damp 之。
 // rec.smP = -1 sentinel：第一颗 stamp 用 raw (保 tap 满压)，之后才 LPF。
@@ -166,6 +170,7 @@ export class InputController {
       }
     }
 
+    const baseW = this.getWidth();
     const rec = {
       pointerType: e.pointerType, role,
       x, y, startX: x, startY: y,
@@ -175,6 +180,10 @@ export class InputController {
       lastP: null,                     // 上一颗有效 raw 压感
       smP: -1,                         // LPF state，-1 = 还没收到首颗
       lastEventTs: -Infinity,          // Safari iOS coalesced 边界回放过滤
+      // 采样间距门限 (笔宽 × 因子 的平方)
+      lastAcceptedX: x,
+      lastAcceptedY: y,
+      minSampleDistSq: (baseW * MIN_SAMPLE_DIST_FACTOR) ** 2,
     };
     this.pointers.set(e.pointerId, rec);
 
@@ -210,20 +219,22 @@ export class InputController {
     }
 
     if (rec.role === "draw") {
-      // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑
+      // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑 + 距离门限
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
       const list = (events && events.length) ? events : [e];
       const enabled = this.getPressureEnabled();
       for (const ev of list) {
-        // **Safari iOS getCoalescedEvents() 跨批次回放过滤**：每次 pointermove
-        // 的 coalesced 列表可能把上一批末尾几个样本回放进来 (eg 上批 t=21 末尾，
-        // 下批 t=4..25 又来一遍)。直接用 → 时间回退 → polyline 折返 → arc-length
-        // 算法被注水 → 视觉上周期性疏密波。鼠标无此问题 (鼠标 coalesced 通常 ≤1)。
-        // 一行 if 挡住。详见 docs/pointer-and-pen-input.md。
+        // **Safari iOS getCoalescedEvents() 跨批次回放过滤** — 详见 docs。
         if (ev.timeStamp <= rec.lastEventTs) continue;
         rec.lastEventTs = ev.timeStamp;
         rec.smX += STROKE_SMOOTH_ALPHA * (ev.clientX - rec.smX);
         rec.smY += STROKE_SMOOTH_ALPHA * (ev.clientY - rec.smY);
+        // 距离门限：相邻样本太近就跳过 (省内存 + 减计算)。粗笔阈值大，细笔阈值小。
+        const ddx = rec.smX - rec.lastAcceptedX;
+        const ddy = rec.smY - rec.lastAcceptedY;
+        if (ddx * ddx + ddy * ddy < rec.minSampleDistSq) continue;
+        rec.lastAcceptedX = rec.smX;
+        rec.lastAcceptedY = rec.smY;
         const { x: wx, y: wy } = this.board.screenToWorld(rec.smX, rec.smY);
         const pressure = effectivePressureFor(rec, ev, enabled);
         this.board.extendStroke(e.pointerId, wx, wy, pressure);

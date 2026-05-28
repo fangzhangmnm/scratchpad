@@ -193,20 +193,25 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss) {
   const widthCss = s.width && s.width > 0
     ? `width:${s.width}px;white-space:pre-wrap;word-break:break-word;`
     : `white-space:pre;`;
+  // A1: <style> 放 foreignObject **内层 HTML 命名空间** — SVG 根 <style> 在
+  //     某些浏览器里不会 cascade 进 foreignObject 的 HTML 文档。放内层 100% 应用。
   const styleBlock = fontCss
-    ? `<style type="text/css"><![CDATA[${fontCss}]]></style>`
+    ? `<style xmlns="http://www.w3.org/1999/xhtml">${fontCss.replace(/<\/style>/gi, "")}</style>`
     : ``;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
-    styleBlock +
-    `<foreignObject width="${renderW}" height="${renderH}">` +
-      `<div xmlns="http://www.w3.org/1999/xhtml" style="` +
-        `font:14px/1.5 ${fontFamily};color:${color};${widthCss}` +
-        `transform:scale(${scale});transform-origin:0 0;` +
-      `">${html}</div>` +
-    `</foreignObject></svg>`;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${renderW}" height="${renderH}">` +
+      `<foreignObject width="${renderW}" height="${renderH}">` +
+        `<div xmlns="http://www.w3.org/1999/xhtml">` +
+          styleBlock +
+          `<div style="font:14px/1.5 ${fontFamily};color:${color};${widthCss}` +
+            `transform:scale(${scale});transform-origin:0 0;">${html}</div>` +
+        `</div>` +
+      `</foreignObject>` +
+    `</svg>`;
 
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+  // A2: data URL 而不是 blob URL — Safari 在 blob-svg 含 foreignObject 时有渲染 bug。
+  // encodeURIComponent → 安全；不用 btoa 因为字体 base64 字符串里有非 ASCII 风险低但 URI 更稳。
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   try {
     await new Promise((resolve, reject) => {
       const img = new Image();
@@ -221,8 +226,6 @@ async function rasterizeTextStroke(s, ctx, tx, ty, scale, inkColor, fontCss) {
     });
   } catch (e) {
     console.warn("text stroke export failed", e);
-  } finally {
-    URL.revokeObjectURL(url);
   }
 }
 
