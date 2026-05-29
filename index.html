@@ -179,11 +179,13 @@
       </button>
     </header>
 
-    <!-- HUD：缩放 / 坐标 / 状态 -->
+    <!-- HUD：缩放 / 状态 / 版本号 (点版本号 = 手动检测更新) -->
     <div class="hud" id="hud">
       <span id="zoomLabel">100%</span>
       <span class="sep" aria-hidden="true">·</span>
       <span id="statusLabel">就绪</span>
+      <span class="sep" aria-hidden="true">·</span>
+      <button id="versionLabel" class="version" type="button" title="点击检测更新">v?</button>
     </div>
 
     <!-- Export sheet -->
@@ -214,6 +216,8 @@
       <button id="updateToastDismiss" type="button" class="dismiss" aria-label="忽略">×</button>
     </div>
 
+    <!-- version.js 必须早于 app.js 加载 (classic script，给 window.SCRATCHPAD_VERSION) -->
+    <script src="./src/version.js"></script>
     <script type="module" src="./src/app.js"></script>
   </body>
 </html>

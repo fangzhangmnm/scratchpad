@@ -257,6 +257,19 @@ body[data-tool="text"] .text-stroke:hover {
   pointer-events: none;
 }
 .hud .sep { opacity: 0.5; }
+.hud .version {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+  opacity: 0.55;
+  cursor: pointer;
+  pointer-events: auto;       /* HUD 整体 pointer-events:none，这个独立可点 */
+}
+.hud .version:hover { opacity: 0.85; }
 
 /* Sheets / dialogs */
 .backdrop {

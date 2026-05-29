@@ -1,5 +1,6 @@
 // SW: cache-first + 后台 revalidate + 改了通知页面（toast）。
-// 改文件前 bump CACHE_VERSION。
+// 版本号在 src/version.js 单一来源；SW 这边 importScripts 进来。
+// 改了任何 precached asset 就到 version.js bump CACHE_VERSION。
 //
 // ScratchPad 是纯本地，没有任何运行时跨源请求 — vendor 也在仓库里。
 // 所以 SW 只关心同源即可。
@@ -8,7 +9,8 @@
 // 的 V8 bytecode cache (按 URL 索引，URL 没变就用旧 bytecode，即使 SW 返回了
 // 新内容也忽略)。详见 docs/pointer-and-pen-input.md / WebPaint 同款问题。
 
-const CACHE_VERSION = "v15-2026-05-28";
+importScripts("./src/version.js");
+const CACHE_VERSION = self.SCRATCHPAD_VERSION;
 const CACHE_NAME = `scratchpad-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -20,6 +22,7 @@ const PRECACHE_URLS = [
   "./icon-192.png",
   "./icon-512.png",
   "./src/styles.css",
+  "./src/version.js",
   "./src/app.js",
   "./src/board.js",
   "./src/input.js",
@@ -104,6 +107,19 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
+    // version.js：SW 直接合成响应，永远是本 SW 自己的 CACHE_VERSION。
+    // 保证 page 拿到的版本号 ≡ 当前 controller 的 CACHE_VERSION，不会因为
+    // 缓存中遗留的旧 version.js 内容而漂移。
+    if (url.pathname.endsWith("/src/version.js")) {
+      return new Response(
+        `self.SCRATCHPAD_VERSION = "${CACHE_VERSION}";\n`,
+        { headers: {
+            "Content-Type": "application/javascript",
+            "Cache-Control": "no-store",
+          } }
+      );
+    }
+
     const cache = await caches.open(CACHE_NAME);
     // ignoreSearch：cache 按裸 URL 存；带 ?v=N 的请求也能命中
     const cached = await cache.match(req, { ignoreSearch: true });

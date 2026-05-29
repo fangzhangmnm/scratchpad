@@ -300,26 +300,97 @@ const input = new InputController(board, {
   window.dispatchEvent(new CustomEvent("sp:histchange", { detail: { canUndo: false, canRedo: false } }));
 })();
 
-// Service worker
-if ("serviceWorker" in navigator) {
-  const host = location.hostname;
-  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "";
-  if (!isLocal) {
-    navigator.serviceWorker.register("./service-worker.js").catch((err) => {
-      console.warn("SW register failed", err);
-    });
-    navigator.serviceWorker.addEventListener("message", (e) => {
-      if (e.data?.type === "asset-updated") {
-        els.updateToast.classList.remove("hidden");
-      }
-    });
-  }
+// ---- Service worker: 四条 update 检测路径 + 手动 check + 版本水印 ----
+// 参考 docs/pwa-update-detection.md (WebPaint 范式)。
+//   路径 1: registration.waiting (开机检查)
+//   路径 2: updatefound + statechange === "installed"
+//   路径 3: SW 主动 postMessage({ type: "asset-updated" })
+//   路径 4: visibilitychange / focus / 10min interval → registration.update()
+const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1", ""]);
+let updateDismissed = false;
+let _swRegistration = null;
+
+function showUpdate() {
+  if (updateDismissed) return;
+  els.updateToast?.classList.remove("hidden");
 }
-els.updateReload.addEventListener("click", () => {
-  navigator.serviceWorker?.controller?.postMessage({ type: "skip-waiting" });
-  location.reload();
+
+// 版本水印：早早写上 (即使 SW 没注册也读 window.SCRATCHPAD_VERSION)
+const versionLabel = document.getElementById("versionLabel");
+if (versionLabel) {
+  versionLabel.textContent = window.SCRATCHPAD_VERSION || "v?";
+  // 点击 = 手动检测更新
+  versionLabel.addEventListener("click", async () => {
+    setStatus("检测更新中…", true);
+    try {
+      // 优先用模块级 _swRegistration (iPad save-to-home-screen 模式下
+      // navigator.serviceWorker.getRegistration() 偶尔返 undefined)
+      const reg = _swRegistration || await navigator.serviceWorker?.getRegistration();
+      if (!reg) { setStatus("Service Worker 未注册"); return; }
+      await reg.update();
+      setTimeout(() => {
+        if (reg.waiting) setStatus("有新版本，点 toast 刷新");
+        else setStatus(`已是最新（${window.SCRATCHPAD_VERSION || "v?"}）`);
+      }, 1500);
+    } catch (e) {
+      setStatus("检测失败：" + (e?.message || e));
+    }
+  });
+}
+
+// 模块顶层 register — 不放 window.load 里 (dynamic import 导致 load 已 fire 完，
+// listener 永不触发；详见 docs/pwa-update-detection.md §0)
+if ("serviceWorker" in navigator && !LOCAL_DEV_HOSTS.has(location.hostname)) {
+  // 路径 3: SW 报告 asset 变了
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type === "asset-updated") showUpdate();
+  });
+
+  navigator.serviceWorker.register("./service-worker.js").then((registration) => {
+    _swRegistration = registration;
+
+    // 路径 1: 开机检查有没有 waiting 的新 SW
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      showUpdate();
+    }
+
+    // 路径 2: 本 session 内装到了新 SW
+    registration.addEventListener("updatefound", () => {
+      const newWorker = registration.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener("statechange", () => {
+        if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+          showUpdate();
+        }
+      });
+    });
+
+    // 路径 4: 主动 poke 浏览器去 check (反 iOS PWA 不主动)
+    const pokeUpdate = () => { registration.update().catch(() => {}); };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") pokeUpdate();
+    });
+    window.addEventListener("focus", pokeUpdate);
+    setInterval(pokeUpdate, 10 * 60 * 1000);
+  }).catch((err) => {
+    console.warn("SW register failed", err);
+  });
+}
+
+// "刷新" 按钮: 推 reg.waiting (不是 controller — 后者是旧 SW，自己已 active，
+// skipWaiting 无意义)。听 controllerchange 后再 reload，让新 SW 接管后从新 cache 服务。
+// 兜底 5s timeout 防 iOS 偶发不 fire controllerchange。
+els.updateReload.addEventListener("click", async () => {
+  const reg = _swRegistration || await navigator.serviceWorker?.getRegistration();
+  if (!reg || !reg.waiting) { location.reload(); return; }
+  let reloaded = false;
+  const doReload = () => { if (reloaded) return; reloaded = true; location.reload(); };
+  navigator.serviceWorker.addEventListener("controllerchange", doReload, { once: true });
+  reg.waiting.postMessage({ type: "skip-waiting" });
+  setTimeout(doReload, 5000);
 });
 els.updateDismiss.addEventListener("click", () => {
+  updateDismissed = true;
   els.updateToast.classList.add("hidden");
 });
 

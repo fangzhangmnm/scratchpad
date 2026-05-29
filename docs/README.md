@@ -12,7 +12,9 @@ PWA + pointer input + canvas drawing) can use these as priors.
 | File | What it covers |
 | - | - |
 | [pwa-shell-pattern.md](pwa-shell-pattern.md) | Zero-build PWA layout, GH Pages deploy, vendored deps |
+| [pwa-update-detection.md](pwa-update-detection.md) | 4 SW update paths + manual check + version watermark + version.js SSoT (WebPaint port) |
 | [service-worker.md](service-worker.md) | Cache-first + ETag toast + version bump discipline, the half-cached state failure mode |
+| [canvas-resize.md](canvas-resize.md) | visualViewport + ResizeObserver + window.resize trio; dimension-change early-exit (cause of stroke / pointer drift) |
 | [pointer-and-pen-input.md](pointer-and-pen-input.md) | PointerEvents, palm rejection, pinch gesture, double-tap detection (saga), light jitter smoothing, Pencil barrel-tap limit |
 | [stroke-rendering.md](stroke-rendering.md) | Path2D vs variable-width ribbon, when to use which, pressure as data-layer not render-layer |
 | [infinite-canvas.md](infinite-canvas.md) | Viewport transform math, DPR/HiDPI, grid rendering, bbox-cull |

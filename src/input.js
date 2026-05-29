@@ -30,6 +30,10 @@ const TAP_MAX_MOVE = 16;          // 屏幕 px — 单次 tap 期间允许的位
 const DOUBLETAP_WINDOW = 500;     // ms — 两次 tap 间隔
 const DOUBLETAP_MAX_GAP = 80;     // 屏幕 px — 两次 tap 的位置容忍
 
+// 多指 tap (Procreate 方言)：双指 = 撤销，三指 = 重做
+const GESTURE_TAP_MAX_MS = 250;
+const GESTURE_TAP_MAX_MOVE_SQ = 256;   // 16 px²
+
 // 抗抖动：写笔画时的一阶指数平滑。α 越大越接近原始 (主要是写字，不能太糊)。
 // α=0.65 大概是：每一新 raw sample 占 65%，历史平滑值占 35%。
 // 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
@@ -61,6 +65,7 @@ export class InputController {
     this.penEverSeen = false;     // 一旦见过 pen，touch 不再绘
     this.spaceDown = false;
     this.gestureStart = null;     // {dist, midX, midY, vp:{tx,ty,scale}}
+    this._gestureTap = null;      // {startTime, isTap, maxCount, startPositions} — 多指 tap 判定
     this.eraseSession = null;     // {ids: Set, strokesById: Map<id,stroke>}
 
     this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
@@ -127,8 +132,12 @@ export class InputController {
           p.role = "gesture";
         }
       }
-      this.pointers.set(e.pointerId, { pointerType: e.pointerType, role: "gesture", x, y });
+      this.pointers.set(e.pointerId, {
+        pointerType: e.pointerType, role: "gesture",
+        x, y, startX: x, startY: y, downTime: performance.now(),
+      });
       this._beginGesture();
+      this._updateGestureTapSnapshot();
       e.preventDefault();
       return;
     }
@@ -208,6 +217,20 @@ export class InputController {
 
     if (this.gestureStart) {
       this._updateGesture();
+      // 多指 tap 判定 — 任一手指移动超阈值就废掉
+      if (this._gestureTap && this._gestureTap.isTap) {
+        for (const [pid, p] of this.pointers) {
+          if (p.role !== "gesture") continue;
+          const start = this._gestureTap.startPositions[pid];
+          if (!start) continue;
+          const dx = p.x - start.x;
+          const dy = p.y - start.y;
+          if (dx * dx + dy * dy > GESTURE_TAP_MAX_MOVE_SQ) {
+            this._gestureTap.isTap = false;
+            break;
+          }
+        }
+      }
       e.preventDefault();
       return;
     }
@@ -260,8 +283,27 @@ export class InputController {
     rec.y = e.clientY;
 
     if (rec.role === "gesture") {
-      if (this.pointers.size < 2) this._endGesture();
-      else this._beginGesture();
+      const remaining = this._gestureTouches().length;
+      if (remaining < 2) {
+        this._endGesture();
+        // 所有 gesture touch 都松手 → 判定多指 tap
+        if (remaining === 0 && this._gestureTap) {
+          const tap = this._gestureTap;
+          this._gestureTap = null;
+          const elapsed = performance.now() - tap.startTime;
+          if (tap.isTap && elapsed < GESTURE_TAP_MAX_MS) {
+            if (tap.maxCount === 2) {
+              this.undo();
+              this.status("双指 · 撤销");
+            } else if (tap.maxCount >= 3) {
+              this.redo();
+              this.status("三指 · 重做");
+            }
+          }
+        }
+      } else {
+        this._beginGesture();   // 重设基准
+      }
       return;
     }
 
@@ -361,11 +403,31 @@ export class InputController {
     if (show) el.classList.remove("hidden");
   }
 
-  // ---- gesture (2 finger pan + pinch) ----
+  // ---- gesture (2 finger pan + pinch + multi-finger tap) ----
   _gestureTouches() {
     return [...this.pointers.values()].filter(
       (p) => p.pointerType === "touch" && p.role !== "ignore",
     );
+  }
+  // 进 / 升级 gesture 时刷一遍 tap 快照
+  _updateGestureTapSnapshot() {
+    const touches = this._gestureTouches();
+    if (!this._gestureTap) {
+      this._gestureTap = {
+        startTime: performance.now(),
+        isTap: true,
+        maxCount: 0,
+        startPositions: {},
+      };
+    }
+    for (const [pid, p] of this.pointers) {
+      if (p.role === "gesture" && !(pid in this._gestureTap.startPositions)) {
+        this._gestureTap.startPositions[pid] = { x: p.x, y: p.y };
+      }
+    }
+    if (touches.length > this._gestureTap.maxCount) {
+      this._gestureTap.maxCount = touches.length;
+    }
   }
   _beginGesture() {
     const touches = this._gestureTouches();
