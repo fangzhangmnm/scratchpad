@@ -38,6 +38,10 @@ const GESTURE_TAP_MAX_MOVE_SQ = 256;   // 16 px²
 // 凑成"两指"→ 松手时误判成双指撤销。新触点落下前，清掉超过此时长没动过的旧 touch。
 const GHOST_POINTER_TIMEOUT_MS = 1500;
 
+// 触屏单指 pan 死区：手指移动超过此距离才真正开始平移。让"双指 tap 撤销"里先落的
+// 那根手指在第二指到来前不把画面挪走 → 双指 tap 零位移、和 panning 不再打架。
+const PAN_TOUCH_DEADZONE_SQ = 36;   // 6 px²
+
 // 抗抖动：写笔画时的一阶指数平滑。α 越大越接近原始 (主要是写字，不能太糊)。
 // α=0.65 大概是：每一新 raw sample 占 65%，历史平滑值占 35%。
 // 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
@@ -184,10 +188,9 @@ export class InputController {
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
       if (!this._shouldDraw(e)) {
-        // pencil 模式下单指 → hold（什么都不做）。抄 WebPaint：单指不 pan，
-        // 否则它会和"双指 tap 撤销"打架（先落的 pan 指针抢手势 / 抬指顺序不对就丢 tap）。
-        // 要平移：用 hand 工具 (H/Space) 或双指拖。
-        role = "hold";
+        // pencil 模式下单指 → pan（带触屏死区，见 _move）。双指 tap 撤销不再被它抢走：
+        // 真正的根因是第二指落下时升级循环漏转 pan→gesture（已修），死区再消除残余抖动。
+        role = "pan";
       } else {
         role = tool === "eraser" ? "erase" : "draw";
       }
@@ -280,6 +283,19 @@ export class InputController {
     } else if (rec.role === "erase") {
       this._doErase(e.clientX, e.clientY);
     } else if (rec.role === "pan") {
+      // 触屏 pan 死区：第二指到来前，先落的手指动得够小就先不平移 (防双指 tap 抖动)。
+      // 注意死区只挡触屏；鼠标/笔即时平移。死区内仍更新 _lastX/Y 基准，避免 engage 时跳跃。
+      if (rec.pointerType === "touch" && !rec._panEngaged) {
+        const ddx = e.clientX - rec.startX;
+        const ddy = e.clientY - rec.startY;
+        if (ddx * ddx + ddy * ddy < PAN_TOUCH_DEADZONE_SQ) {
+          rec._lastX = e.clientX;
+          rec._lastY = e.clientY;
+          e.preventDefault();
+          return;
+        }
+        rec._panEngaged = true;
+      }
       // 用 movementX/Y 更稳 (pointer capture 时仍然有效)
       const dx = e.movementX || (e.clientX - (rec._lastX ?? e.clientX));
       const dy = e.movementY || (e.clientY - (rec._lastY ?? e.clientY));
