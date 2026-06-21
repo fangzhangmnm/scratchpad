@@ -21,10 +21,9 @@ import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
-// 屏幕双击 = 切换 笔/橡皮。
-// **只有 pencil 模式下的手指** (penEverSeen=true，touch role=pan) 才触发。
+// 屏幕双击 = 切换 笔/橡皮（手指双击；手指现在恒 pan，双击只在见过 Pencil 的设备上才切工具）。
 //   - pen 自己不触发：写等号 / i-dot / 短笔画都误判过 (上一版)。Pencil 用户走工具栏切换。
-//   - 触屏模式 (无 pen 见过) 的手指也不触发：finger 是绘图主输入，不能跟 dot 冲突。
+//   - 没见过 pen 的设备不触发 (penEverSeen=false)：走工具栏 / 键盘切换。
 const TAP_MAX_DURATION = 220;    // ms — 单次按下持续多久还算 tap
 const TAP_MAX_MOVE = 16;          // 屏幕 px — 单次 tap 期间允许的位移
 const DOUBLETAP_WINDOW = 500;     // ms — 两次 tap 间隔
@@ -70,7 +69,7 @@ export class InputController {
     this.status = status || (() => {});
 
     this.pointers = new Map();    // pointerId → {pointerType, role, x, y, pressure, startX, startY}
-    this.penEverSeen = false;     // 一旦见过 pen，touch 不再绘
+    this.penEverSeen = false;     // 见过 pen 的设备才启用"手指双击切笔/橡皮"(手指本就恒 pan)
     this.spaceDown = false;
     this.gestureStart = null;     // {dist, midX, midY, vp:{tx,ty,scale}}
     this._gestureTap = null;      // {startTime, isTap, maxCount, startPositions} — 多指 tap 判定
@@ -104,12 +103,6 @@ export class InputController {
 
     window.addEventListener("keydown", (e) => this._keydown(e));
     window.addEventListener("keyup", (e) => this._keyup(e));
-  }
-
-  _shouldDraw(e) {
-    // pencil 时禁触
-    if (e.pointerType === "touch" && this.penEverSeen) return false;
-    return true;
   }
 
   _down(e) {
@@ -187,13 +180,10 @@ export class InputController {
       if (e.button === 2 || e.buttons & 2) role = "erase";
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
-      if (!this._shouldDraw(e)) {
-        // pencil 模式下单指 → pan（带触屏死区，见 _move）。双指 tap 撤销不再被它抢走：
-        // 真正的根因是第二指落下时升级循环漏转 pan→gesture（已修），死区再消除残余抖动。
-        role = "pan";
-      } else {
-        role = tool === "eraser" ? "erase" : "draw";
-      }
+      // 手指永远 pan（带触屏死区，见 _move），永不作画。作画走 Pencil 或鼠标——
+      // pointerType 已天然区分手指/笔/鼠，不需要 penEverSeen 那套(内存态、每次重载重置→
+      // "每次得先用笔画一笔单指才 pan")。鼠绘照常 (mouse 分支)。抄 WebPaint 默认(单指不作画)。
+      role = "pan";
     }
 
     const baseW = this.getWidth();
