@@ -394,6 +394,58 @@ body[data-tool="text"] .text-stroke:hover {
   padding: 2px 6px;
 }
 
+/* ☰ 菜单面板 (dropdown：回到原点 / 导出 / 主题 / 强制更新)
+   z-index 15：高于 top-bar/hud (10)，低于 backdrop/sheet (20/21)。
+   菜单项触发 sheet 前会先关菜单，故不会和 sheet 抢层。位置由 JS 在打开时
+   按 #menuButton 锚定，下面的 top/right 只是兜底。*/
+.menu-panel {
+  position: fixed;
+  top: calc(max(env(safe-area-inset-top, 0px), 8px) + 52px);
+  right: max(env(safe-area-inset-right, 0px), 12px);
+  z-index: 15;
+  min-width: 200px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.menu-panel.hidden { display: none; }
+.menu-info {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+  opacity: 0.6;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 2px;
+}
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.menu-item:hover { background: var(--bg-soft); }
+.menu-item:active { background: var(--line); }
+
 /* Mobile tweaks */
 @media (max-width: 540px) {
   .top-bar { gap: 2px; padding: 4px 6px; }

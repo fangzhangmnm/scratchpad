@@ -20,14 +20,16 @@ const els = {
   zoomLabel: document.getElementById("zoomLabel"),
   statusLabel: document.getElementById("statusLabel"),
   widthSlider: document.getElementById("widthSlider"),
-  undoBtn: document.getElementById("undoButton"),
-  redoBtn: document.getElementById("redoButton"),
   gridBtn: document.getElementById("gridButton"),
-  fitBtn: document.getElementById("fitButton"),
-  exportBtn: document.getElementById("exportButton"),
   clearBtn: document.getElementById("clearButton"),
-  themeBtn: document.getElementById("themeButton"),
   pressureBtn: document.getElementById("pressureButton"),
+  menuBtn: document.getElementById("menuButton"),
+  appMenu: document.getElementById("appMenu"),
+  menuVersion: document.getElementById("menuVersion"),
+  menuFit: document.getElementById("menuFit"),
+  menuExport: document.getElementById("menuExport"),
+  menuTheme: document.getElementById("menuTheme"),
+  menuForceUpdate: document.getElementById("menuForceUpdate"),
   toolBtns: [...document.querySelectorAll(".tool[data-tool]")],
   swatches: [...document.querySelectorAll(".swatch[data-color]")],
   exportSheet: document.getElementById("exportSheet"),
@@ -85,7 +87,7 @@ function applyTheme(t) {
   theme = t;
   document.documentElement.setAttribute("data-theme", t);
   localStorage.setItem("scratchpad.theme", t);
-  els.themeBtn.title = `主题：${THEME_LABEL[t]}`;
+  els.menuTheme.textContent = `主题：${THEME_LABEL[t]}`;
   // 等下一帧让 CSS 变量先生效
   requestAnimationFrame(applyThemeColorsToBoard);
 }
@@ -145,12 +147,7 @@ els.pressureBtn?.addEventListener("click", () => {
 applyPressure(state.pressureEnabled);
 
 // Undo/Redo
-els.undoBtn.addEventListener("click", () => input.undo());
-els.redoBtn.addEventListener("click", () => input.redo());
-window.addEventListener("sp:histchange", (e) => {
-  els.undoBtn.disabled = !e.detail.canUndo;
-  els.redoBtn.disabled = !e.detail.canRedo;
-});
+// undo/redo 按钮已移除：撤销/重做走键盘 (Ctrl+Z / Ctrl+Shift+Z) + 双指/三指 tap。
 
 // Grid
 function refreshGridLabel() {
@@ -165,7 +162,8 @@ els.gridBtn.addEventListener("click", () => {
 window.addEventListener("sp:gridcycle", () => els.gridBtn.click());
 
 // Fit / reset
-els.fitBtn.addEventListener("click", () => {
+els.menuFit.addEventListener("click", () => {
+  closeMenu();
   board.resetViewport();
   updateZoomLabel();
   setStatus("回到原点");
@@ -180,7 +178,8 @@ function closeSheet(sheet, backdrop) {
   backdrop.classList.add("hidden");
   sheet.classList.add("hidden");
 }
-els.exportBtn.addEventListener("click", () => {
+els.menuExport.addEventListener("click", () => {
+  closeMenu();
   if (els.shareAllBtn) els.shareAllBtn.hidden = !isShareSupported();
   openSheet(els.exportSheet, els.exportBackdrop);
 });
@@ -235,12 +234,61 @@ els.clearSheet.addEventListener("click", async (e) => {
   setStatus("已烧掉");
 });
 
-// Theme cycle
-els.themeBtn.addEventListener("click", () => {
+// ☰ 菜单：开关 / 锚定 / 外部点击 / Esc
+function positionMenu() {
+  const r = els.menuBtn.getBoundingClientRect();
+  els.appMenu.style.top = (r.bottom + 6) + "px";
+  // 右对齐到按钮右缘，clamp 进视口
+  els.appMenu.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+}
+function openMenu() {
+  positionMenu();
+  els.appMenu.classList.remove("hidden");
+  els.menuBtn.setAttribute("aria-expanded", "true");
+}
+function closeMenu() {
+  els.appMenu.classList.add("hidden");
+  els.menuBtn.setAttribute("aria-expanded", "false");
+}
+els.menuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (els.appMenu.classList.contains("hidden")) openMenu(); else closeMenu();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (els.appMenu.classList.contains("hidden")) return;
+  if (els.appMenu.contains(e.target) || els.menuBtn.contains(e.target)) return;
+  closeMenu();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.appMenu.classList.contains("hidden")) closeMenu();
+});
+
+// 主题：菜单里循环切换 (auto→day→night)，菜单保持打开方便连点
+els.menuTheme.addEventListener("click", () => {
   const i = THEMES.indexOf(theme);
   const next = THEMES[(i + 1) % THEMES.length];
   applyTheme(next);
   setStatus(`主题 · ${THEME_LABEL[next]}`);
+});
+
+// 强制更新：注销所有 SW + 清空 Cache Storage 后硬重载 (抄 WebPaint menuForcePwaReset)。
+// 只清缓存/SW，不动 IndexedDB → 你的画不会丢。藏在菜单里，误触风险低，故不加二次确认。
+els.menuForceUpdate.addEventListener("click", async () => {
+  closeMenu();
+  setStatus("清缓存重启中…", true);
+  try {
+    if (navigator.serviceWorker) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister().catch(() => {});
+    }
+    if (typeof caches !== "undefined") {
+      const keys = await caches.keys();
+      for (const k of keys) await caches.delete(k).catch(() => {});
+    }
+    setTimeout(() => location.reload(), 200);
+  } catch (e) {
+    setStatus("清缓存失败：" + (e?.message || e), true);
+  }
 });
 
 // HUD
@@ -320,6 +368,8 @@ function showUpdate() {
 }
 
 // 版本水印：早早写上 (即使 SW 没注册也读 window.SCRATCHPAD_VERSION)
+if (els.menuVersion) els.menuVersion.textContent = window.SCRATCHPAD_VERSION || "v?";
+
 const versionLabel = document.getElementById("versionLabel");
 if (versionLabel) {
   versionLabel.textContent = window.SCRATCHPAD_VERSION || "v?";

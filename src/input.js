@@ -137,13 +137,12 @@ export class InputController {
     );
     if (e.pointerType === "touch" && activeTouches.length >= 1) {
       for (const [pid, p] of this.pointers) {
-        if (p.role === "draw") {
-          this.board.cancelStroke(pid);
-          p.role = "gesture";
-        } else if (p.role === "erase") {
-          this._commitErase();
-          p.role = "gesture";
-        }
+        if (p.role === "draw") this.board.cancelStroke(pid);
+        else if (p.role === "erase") this._commitErase();
+        // 在场的非掌触 touch 全升级成 gesture —— 包括先落的 hold/pan 指针。
+        // 否则它们不算 gesture：tap 判定只看 gesture 指针，抬指顺序不对 (gesture 指
+        // 先抬→remaining≠0) 双指 tap 就丢掉。这是"双指很难按出来"的根因。
+        if (p.pointerType === "touch" && p.role !== "ignore") p.role = "gesture";
       }
       this.pointers.set(e.pointerId, {
         pointerType: e.pointerType, role: "gesture",
@@ -185,8 +184,10 @@ export class InputController {
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
       if (!this._shouldDraw(e)) {
-        // pencil 模式下手指 → pan
-        role = "pan";
+        // pencil 模式下单指 → hold（什么都不做）。抄 WebPaint：单指不 pan，
+        // 否则它会和"双指 tap 撤销"打架（先落的 pan 指针抢手势 / 抬指顺序不对就丢 tap）。
+        // 要平移：用 hand 工具 (H/Space) 或双指拖。
+        role = "hold";
       } else {
         role = tool === "eraser" ? "erase" : "draw";
       }

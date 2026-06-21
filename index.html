@@ -122,19 +122,6 @@
 
       <div class="spacer"></div>
 
-      <button class="tool" id="undoButton" type="button" title="撤销 (Ctrl+Z)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="9 14 4 9 9 4"></polyline>
-          <path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>
-        </svg>
-      </button>
-      <button class="tool" id="redoButton" type="button" title="重做 (Ctrl+Shift+Z)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="15 14 20 9 15 4"></polyline>
-          <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
-        </svg>
-      </button>
-
       <button class="tool" id="gridButton" type="button" title="网格 (G)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="3" width="18" height="18" rx="1"></rect>
@@ -142,24 +129,6 @@
           <line x1="15" y1="3" x2="15" y2="21"></line>
           <line x1="3" y1="9" x2="21" y2="9"></line>
           <line x1="3" y1="15" x2="21" y2="15"></line>
-        </svg>
-      </button>
-
-      <button class="tool" id="fitButton" type="button" title="回到原点 (0)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"></circle>
-          <line x1="12" y1="2" x2="12" y2="5"></line>
-          <line x1="12" y1="19" x2="12" y2="22"></line>
-          <line x1="2" y1="12" x2="5" y2="12"></line>
-          <line x1="19" y1="12" x2="22" y2="12"></line>
-        </svg>
-      </button>
-
-      <button class="tool" id="exportButton" type="button" title="导出">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
       </button>
 
@@ -172,12 +141,23 @@
         </svg>
       </button>
 
-      <button class="tool" id="themeButton" type="button" title="主题">
+      <button class="tool" id="menuButton" type="button" title="菜单" aria-haspopup="true" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
         </svg>
       </button>
     </header>
+
+    <!-- ☰ 菜单：回到原点 / 导出 / 主题 / 强制更新 -->
+    <div class="menu-panel hidden" id="appMenu" role="menu" aria-label="菜单">
+      <div class="menu-info" id="menuVersion">v?</div>
+      <button class="menu-item" id="menuFit" type="button" role="menuitem">回到原点</button>
+      <button class="menu-item" id="menuExport" type="button" role="menuitem">导出…</button>
+      <button class="menu-item" id="menuTheme" type="button" role="menuitem">主题：跟随系统</button>
+      <button class="menu-item" id="menuForceUpdate" type="button" role="menuitem">强制更新（清缓存重启）</button>
+    </div>
 
     <!-- HUD：缩放 / 状态 / 版本号 (点版本号 = 手动检测更新) -->
     <div class="hud" id="hud">
