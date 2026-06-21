@@ -181,10 +181,11 @@ export class InputController {
       if (e.button === 2 || e.buttons & 2) role = "erase";
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
-      // 手指默认恒 pan（带触屏死区，见 _move）；作画走 Pencil / 鼠标（pointerType 天然区分）。
-      // 仅当「单指绘画」开关 ON 且本会话没见过 Pencil 时，手指才作画——和 WebPaint 对齐
-      // (singleFingerDraw 默认关；见过 Pencil 的设备手指仍恒 pan，避免和落笔冲突)。
-      if (!this.penEverSeen && this.getSingleFingerDraw()) {
+      // 「单指绘画」纯开关：开 = 手指作画，关 = 手指恒 pan（带触屏死区，见 _move）。
+      // 不再看 penEverSeen——之前抄 WebPaint 的 `!penEverSeen` 门控会让用过 Pencil 的设备
+      // (iPad) 即使开了开关也永远 pan，等于开关失灵。开关本就是显式 opt-in，由用户决定。
+      // 代价：开了之后 Pencil 抬笔时掌触可能留痕（落笔时仍有 penDrawing 掌触排除兜底）。
+      if (this.getSingleFingerDraw()) {
         role = tool === "eraser" ? "erase" : "draw";
       } else {
         role = "pan";

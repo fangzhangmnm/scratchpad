@@ -273,8 +273,7 @@ els.menuTheme.addEventListener("click", () => {
   setStatus(`主题 · ${THEME_LABEL[next]}`);
 });
 
-// 单指绘画开关（和 WebPaint 对齐，默认关）：开 = 没见过 Pencil 时手指作画；关 = 手指恒 pan。
-// 菜单保持打开方便切。
+// 单指绘画开关（默认关）：开 = 手指作画；关 = 手指恒 pan。菜单保持打开方便切。
 function applySingleFingerDraw(on) {
   state.singleFingerDraw = !!on;
   els.menuSingleFinger.textContent = `单指绘画：${state.singleFingerDraw ? "开" : "关"}`;
