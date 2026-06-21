@@ -56,7 +56,9 @@ html, body {
   overscroll-behavior: none;
   -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;          /* iOS 长按"拷贝/分享/存图"callout 杀手 (抄 WebPaint v216) */
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;           /* UI 外壳去掉双击缩放 + 300ms 延迟 (.board 另置 none) */
 }
 
 .board {
@@ -66,7 +68,17 @@ html, body {
   height: 100%;
   display: block;
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
   cursor: crosshair;
+}
+
+/* 文本编辑区放行：要能选中/长按弹 callout 粘贴 (body 的 none 在这里翻回来) */
+.text-editor, textarea, input {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 body[data-tool="hand"] .board { cursor: grab; }

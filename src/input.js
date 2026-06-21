@@ -34,6 +34,10 @@ const DOUBLETAP_MAX_GAP = 80;     // 屏幕 px — 两次 tap 的位置容忍
 const GESTURE_TAP_MAX_MS = 250;
 const GESTURE_TAP_MAX_MOVE_SQ = 256;   // 16 px²
 
+// ghost pointer 自愈：iOS 偶尔吞掉 pointerup，残留一个"鬼指针"会和下一个真触点
+// 凑成"两指"→ 松手时误判成双指撤销。新触点落下前，清掉超过此时长没动过的旧 touch。
+const GHOST_POINTER_TIMEOUT_MS = 1500;
+
 // 抗抖动：写笔画时的一阶指数平滑。α 越大越接近原始 (主要是写字，不能太糊)。
 // α=0.65 大概是：每一新 raw sample 占 65%，历史平滑值占 35%。
 // 起笔 / 短点子 (单 tap、i-dot) 几乎不受影响，长划才积累。
@@ -84,6 +88,14 @@ export class InputController {
     c.addEventListener("pointerleave", (e) => this._up(e, true));
     c.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // iOS 长按弹框/放大镜杀手：单指 touchstart 必须 preventDefault (非 passive)。
+    // contextmenu 在 iOS 上几乎从不 fire，单纯 user-select:none 也压不住 callout；
+    // 唯一可靠的是拦住 touchstart 默认动作。画板已 touch-action:none 故不影响绘制
+    // (指针事件独立于 touch 默认动作，单指照样画)。多指 (>=2) 不拦，留给系统/手势路由。
+    c.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 1) e.preventDefault();
+    }, { passive: false });
+
     c.addEventListener("wheel", (e) => this._wheel(e), { passive: false });
 
     window.addEventListener("keydown", (e) => this._keydown(e));
@@ -97,6 +109,7 @@ export class InputController {
   }
 
   _down(e) {
+    this._purgeStalePointers();
     if (e.pointerType === "pen") {
       this.penEverSeen = true;
       // pen 落下立即作废任何挂起的 touch tap：
@@ -214,6 +227,7 @@ export class InputController {
     if (!rec) return;
     rec.x = e.clientX;
     rec.y = e.clientY;
+    rec.lastSeen = performance.now();   // ghost 自愈用：心跳，证明这指针还活着
 
     if (this.gestureStart) {
       this._updateGesture();
@@ -464,6 +478,41 @@ export class InputController {
   }
   _endGesture() {
     this.gestureStart = null;
+    delete document.body.dataset.panning;
+  }
+
+  // ---- ghost pointer 自愈 ----
+  // 清掉久未更新的"鬼"触点 (iOS 吞了它的 pointerup)。在每次 _down 开头跑一遍，
+  // 避免鬼指针和真触点凑成假双指 → 误触发撤销/缩放。
+  _purgeStalePointers() {
+    const now = performance.now();
+    let removed = false;
+    for (const [pid, p] of this.pointers) {
+      if (p.pointerType !== "touch") continue;
+      const seen = p.lastSeen ?? p.downTime ?? now;
+      if (now - seen > GHOST_POINTER_TIMEOUT_MS) {
+        if (p.role === "draw") this.board.cancelStroke(pid);
+        this.pointers.delete(pid);
+        removed = true;
+      }
+    }
+    // 清完若已不够两指，收掉 gesture / tap 残留状态
+    if (removed && this.gestureStart && this._gestureTouches().length < 2) {
+      this._endGesture();
+      this._gestureTap = null;
+    }
+  }
+
+  // 失焦 / 切后台 / 系统打断时，丢弃所有在途指针，回到干净基线。
+  // 防止"切走再切回"时残留的半截手势被当成真输入。
+  cancelAllPointers() {
+    for (const [pid, p] of this.pointers) {
+      if (p.role === "draw") this.board.cancelStroke(pid);
+    }
+    this.eraseSession = null;
+    this.pointers.clear();
+    this._endGesture();
+    this._gestureTap = null;
     delete document.body.dataset.panning;
   }
 

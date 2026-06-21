@@ -2,6 +2,7 @@
 
 import { Board, GRID_MODES } from "./board.js";
 import { InputController } from "./input.js";
+import { installPlatformGuards } from "./platform-guards.js";
 import { loadAllStrokes, clearAll, setMeta, getMeta } from "./db.js";
 import {
   exportPngCurrentView, exportPngAll, exportPdfAll,
@@ -275,6 +276,9 @@ const input = new InputController(board, {
   onChange: () => {},
   status: setStatus,
 });
+
+// 全局移动端护栏：防系统抢手势 + 防长按弹奇怪对话框 + 切后台清在途指针
+installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });
 
 // 启动
 (async function boot() {

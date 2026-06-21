@@ -210,3 +210,29 @@ Screen." There's no JS API to programmatically trigger that flow.
 Best you can do: add a one-time hint banner the first time the app
 loads in mobile Safari (not already standalone) — but in ScratchPad
 we did not, to keep the boot UI minimal.
+
+## 防长按弹奇怪对话框硬化 (v17 / 2026-06-20)
+
+> as-of v17-2026-06-20。抄 WebPaint (v216 callout / v232 selectstart) 的硬化，
+> 补 ScratchPad 早前只有 `contextmenu` preventDefault + `user-select:none` 的缺口。
+
+iOS 上画板长按会弹"拷贝/查询/分享/存图"callout，甚至放大镜，打断绘制 / 偷走手势。
+`contextmenu` 在 iOS 几乎从不 fire，光靠 CSS `user-select:none` 也压不住。落地的层：
+
+1. **CSS** (`styles.css`): `html,body` + `.board` 都加 `-webkit-touch-callout:none`；
+   body 加 `touch-action:manipulation`(去双击缩放/300ms 延迟)，`.board` 维持
+   `touch-action:none`。`.text-editor/textarea/input` 翻回 `user-select:text` +
+   `callout:default`，否则编辑框选不中、不能长按粘贴。
+2. **canvas 单指 touchstart preventDefault (非 passive)** (`input.js _bind`):
+   唯一可靠的 callout/放大镜杀手。`touches.length===1` 才拦，多指留给手势路由。
+   指针事件独立于 touch 默认动作，所以单指绘制不受影响。
+3. **全局护栏** (`platform-guards.js`, capture+非passive): `gesturestart/change/end`
+   (iOS 私有双指缩放)、`touchstart>=3 指`(挡 iPad 分屏/Slide Over/系统三指 —— 注意
+   三指 redo 走指针事件不受影响)、`dblclick`(系统选词，文本框放行)、`selectstart`
+   (画板长按不起选区，文本框放行)。
+4. **ghost pointer 自愈** (`input.js`): iOS 偶尔吞 pointerup，残留鬼指针会和下一个
+   真触点凑成假双指 → 误触发撤销。`_purgeStalePointers()` 在每次 `_down` 清掉 >1500ms
+   没心跳的旧 touch；`cancelAllPointers()` 在 blur / visibilitychange(hidden) 全清。
+
+注：双指撤销 / 三指重做手势本身在此之前就已实现 (input.js，"抄 WebPaint")；
+本次只补让它在 iPad 上不被系统手势/callout 干扰的硬化。
