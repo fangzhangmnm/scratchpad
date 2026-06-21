@@ -20,12 +20,12 @@ const els = {
   zoomLabel: document.getElementById("zoomLabel"),
   statusLabel: document.getElementById("statusLabel"),
   widthSlider: document.getElementById("widthSlider"),
-  gridBtn: document.getElementById("gridButton"),
   clearBtn: document.getElementById("clearButton"),
   pressureBtn: document.getElementById("pressureButton"),
   menuBtn: document.getElementById("menuButton"),
   appMenu: document.getElementById("appMenu"),
   menuVersion: document.getElementById("menuVersion"),
+  menuGrid: document.getElementById("menuGrid"),
   menuFit: document.getElementById("menuFit"),
   menuExport: document.getElementById("menuExport"),
   menuTheme: document.getElementById("menuTheme"),
@@ -149,17 +149,17 @@ applyPressure(state.pressureEnabled);
 // Undo/Redo
 // undo/redo 按钮已移除：撤销/重做走键盘 (Ctrl+Z / Ctrl+Shift+Z) + 双指/三指 tap。
 
-// Grid
+// Grid（菜单项，循环切换；菜单保持打开方便连点）
 function refreshGridLabel() {
   const map = { none: "无", dots: "点", squares: "方", lines: "横" };
-  els.gridBtn.title = `网格：${map[board.gridMode]} (G)`;
+  els.menuGrid.textContent = `网格：${map[board.gridMode]}`;
 }
-els.gridBtn.addEventListener("click", () => {
+els.menuGrid.addEventListener("click", () => {
   board.cycleGridMode();
   refreshGridLabel();
   setStatus(`网格 · ${board.gridMode}`);
 });
-window.addEventListener("sp:gridcycle", () => els.gridBtn.click());
+window.addEventListener("sp:gridcycle", () => els.menuGrid.click());
 
 // Fit / reset
 els.menuFit.addEventListener("click", () => {
