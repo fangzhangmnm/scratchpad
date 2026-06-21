@@ -56,7 +56,7 @@ const MIN_SAMPLE_DIST_FACTOR = 0.25;
 const PRESSURE_SMOOTH_ALPHA = 0.4;
 
 export class InputController {
-  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, onTextPlace, onTextDismiss, status } = {}) {
+  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, getSingleFingerDraw, onTextPlace, onTextDismiss, status } = {}) {
     this.board = board;
     this.canvas = board.canvas;
     this.onChange = onChange || (() => {});
@@ -64,6 +64,7 @@ export class InputController {
     this.getColor = getColor || (() => "ink");
     this.getWidth = getWidth || (() => 2.2);
     this.getPressureEnabled = getPressureEnabled || (() => false);
+    this.getSingleFingerDraw = getSingleFingerDraw || (() => false);
     this.onTextPlace = onTextPlace || (() => {});
     this.onTextDismiss = onTextDismiss || (() => {});
     this.status = status || (() => {});
@@ -180,10 +181,14 @@ export class InputController {
       if (e.button === 2 || e.buttons & 2) role = "erase";
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
-      // 手指永远 pan（带触屏死区，见 _move），永不作画。作画走 Pencil 或鼠标——
-      // pointerType 已天然区分手指/笔/鼠，不需要 penEverSeen 那套(内存态、每次重载重置→
-      // "每次得先用笔画一笔单指才 pan")。鼠绘照常 (mouse 分支)。抄 WebPaint 默认(单指不作画)。
-      role = "pan";
+      // 手指默认恒 pan（带触屏死区，见 _move）；作画走 Pencil / 鼠标（pointerType 天然区分）。
+      // 仅当「单指绘画」开关 ON 且本会话没见过 Pencil 时，手指才作画——和 WebPaint 对齐
+      // (singleFingerDraw 默认关；见过 Pencil 的设备手指仍恒 pan，避免和落笔冲突)。
+      if (!this.penEverSeen && this.getSingleFingerDraw()) {
+        role = tool === "eraser" ? "erase" : "draw";
+      } else {
+        role = "pan";
+      }
     }
 
     const baseW = this.getWidth();

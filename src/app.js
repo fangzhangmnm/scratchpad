@@ -29,6 +29,7 @@ const els = {
   menuFit: document.getElementById("menuFit"),
   menuExport: document.getElementById("menuExport"),
   menuTheme: document.getElementById("menuTheme"),
+  menuSingleFinger: document.getElementById("menuSingleFinger"),
   menuForceUpdate: document.getElementById("menuForceUpdate"),
   toolBtns: [...document.querySelectorAll(".tool[data-tool]")],
   swatches: [...document.querySelectorAll(".swatch[data-color]")],
@@ -54,6 +55,7 @@ const state = {
   color: "ink",
   width: 2.2,
   pressureEnabled: safeLS("scratchpad.pressure") === "1",
+  singleFingerDraw: safeLS("scratchpad.singleFingerDraw") === "1",  // 默认关：手指 pan，不画
 };
 
 const board = new Board(els.board);
@@ -271,6 +273,19 @@ els.menuTheme.addEventListener("click", () => {
   setStatus(`主题 · ${THEME_LABEL[next]}`);
 });
 
+// 单指绘画开关（和 WebPaint 对齐，默认关）：开 = 没见过 Pencil 时手指作画；关 = 手指恒 pan。
+// 菜单保持打开方便切。
+function applySingleFingerDraw(on) {
+  state.singleFingerDraw = !!on;
+  els.menuSingleFinger.textContent = `单指绘画：${state.singleFingerDraw ? "开" : "关"}`;
+  try { localStorage.setItem("scratchpad.singleFingerDraw", state.singleFingerDraw ? "1" : "0"); } catch {}
+}
+els.menuSingleFinger.addEventListener("click", () => {
+  applySingleFingerDraw(!state.singleFingerDraw);
+  setStatus(`单指绘画 · ${state.singleFingerDraw ? "开" : "关"}`);
+});
+applySingleFingerDraw(state.singleFingerDraw);
+
 // 强制更新：注销所有 SW + 清空 Cache Storage 后硬重载 (抄 WebPaint menuForcePwaReset)。
 // 只清缓存/SW，不动 IndexedDB → 你的画不会丢。藏在菜单里，误触风险低，故不加二次确认。
 els.menuForceUpdate.addEventListener("click", async () => {
@@ -319,6 +334,7 @@ const input = new InputController(board, {
   getColor: () => state.color,
   getWidth: () => state.width,
   getPressureEnabled: () => state.pressureEnabled,
+  getSingleFingerDraw: () => state.singleFingerDraw,
   onTextPlace: (rect) => textManager.openEditor(rect),
   onTextDismiss: () => textManager.dismissIfEmpty(),
   onChange: () => {},
