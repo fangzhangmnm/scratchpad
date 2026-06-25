@@ -55,7 +55,7 @@ const state = {
   color: "ink",
   width: 2.2,
   pressureEnabled: safeLS("scratchpad.pressure") === "1",
-  singleFingerDraw: safeLS("scratchpad.singleFingerDraw") === "1",  // 默认关：手指 pan，不画
+  singleFingerDraw: safeLS("scratchpad.singleFingerDraw") === "1",  // 默认关：单指惰性(防手掌误触)，平移走两指
 };
 
 const board = new Board(els.board);
@@ -273,7 +273,7 @@ els.menuTheme.addEventListener("click", () => {
   setStatus(`主题 · ${THEME_LABEL[next]}`);
 });
 
-// 单指绘画开关（默认关）：开 = 手指作画；关 = 手指恒 pan。菜单保持打开方便切。
+// 单指绘画开关（默认关）：开 = 手指作画；关 = 单指惰性(防手掌误触)，平移走两指。菜单保持打开方便切。
 function applySingleFingerDraw(on) {
   state.singleFingerDraw = !!on;
   els.menuSingleFinger.textContent = `单指绘画：${state.singleFingerDraw ? "开" : "关"}`;

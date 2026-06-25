@@ -3,7 +3,8 @@
 // 行为矩阵:
 //   tool = pen / eraser:
 //     pen (Apple Pencil / stylus)     → 画 / 擦
-//     touch (手指)                    → 一旦本设备见过 pen，永远忽略 (防误触)；否则单指画
+//     touch (手指)                    → 单指惰性 hold（不画不平移，防手掌误触）；
+//                                        「单指绘画」开关开时单指作画。**单指永不平移画布**。
 //     2 个 touch 同时按下             → 平移 + pinch 缩放，取消正在画的 stroke
 //     mouse 左键                      → 画
 //     mouse 中键 / 右键               → 平移
@@ -21,7 +22,7 @@ import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
-// 屏幕双击 = 切换 笔/橡皮（手指双击；手指现在恒 pan，双击只在见过 Pencil 的设备上才切工具）。
+// 屏幕双击 = 切换 笔/橡皮（手指双击；单指现在惰性 hold，双击只在见过 Pencil 的设备上才切工具）。
 //   - pen 自己不触发：写等号 / i-dot / 短笔画都误判过 (上一版)。Pencil 用户走工具栏切换。
 //   - 没见过 pen 的设备不触发 (penEverSeen=false)：走工具栏 / 键盘切换。
 const TAP_MAX_DURATION = 220;    // ms — 单次按下持续多久还算 tap
@@ -181,14 +182,15 @@ export class InputController {
       if (e.button === 2 || e.buttons & 2) role = "erase";
       else role = tool === "eraser" ? "erase" : "draw";
     } else if (e.pointerType === "touch") {
-      // 「单指绘画」纯开关：开 = 手指作画，关 = 手指恒 pan（带触屏死区，见 _move）。
-      // 不再看 penEverSeen——之前抄 WebPaint 的 `!penEverSeen` 门控会让用过 Pencil 的设备
-      // (iPad) 即使开了开关也永远 pan，等于开关失灵。开关本就是显式 opt-in，由用户决定。
-      // 代价：开了之后 Pencil 抬笔时掌触可能留痕（落笔时仍有 penDrawing 掌触排除兜底）。
+      // 「单指绘画」纯开关：开 = 手指作画；关 = 单指惰性 hold（不画、**也不平移画布**）。
+      // 防手掌误触：搁在屏上的手掌 = 一个单指 touch，与真手指物理上无法区分。只要单指能 pan，
+      //   手掌就能在画画时把画布带跑。故单指永不 pan——平移一律两指（第二指到来即升级 gesture）。
+      //   hand 工具 / 空格仍可单指 pan（上面已分流，那是显式平移意图）。
+      // hold 仍参与双指/三指手势 + 屏幕双击切笔（见 _move / _up）。
       if (this.getSingleFingerDraw()) {
         role = tool === "eraser" ? "erase" : "draw";
       } else {
-        role = "pan";
+        role = "hold";
       }
     }
 
@@ -298,6 +300,8 @@ export class InputController {
       rec._lastX = e.clientX;
       rec._lastY = e.clientY;
       this.board.pan(dx, dy);
+    } else if (rec.role === "hold") {
+      // 单指惰性：不画不平移（防手掌误触）。只等第二指到来升级成 gesture，或松手判双击切笔。
     }
     e.preventDefault();
   }
@@ -352,8 +356,8 @@ export class InputController {
       return;
     }
 
-    // 屏幕双击 → 切换工具。**只**在 pencil 模式下的手指生效 (palm-rejection 把
-    // touch 转 pan 的状态)。pen 自己不参与，触屏主输入模式下的 finger 也不参与。
+    // 屏幕双击 → 切换工具。**只**在见过 pen 的设备上的手指生效（单指此时是惰性 hold）。
+    // pen 自己不参与，没见过 pen 的纯触屏设备也不参与。
     let isTap = false;
     const tapEligible = !cancelled && rec.downTime &&
       e.pointerType === "touch" && this.penEverSeen &&
@@ -371,7 +375,7 @@ export class InputController {
           // 取消当前 stroke (还没 endStroke 的情况)
           if (rec.role === "draw") this.board.cancelStroke(e.pointerId);
           else if (rec.role === "erase") this.eraseSession = null;
-          // pan 角色无 stroke 可撤
+          // hold / pan 角色无 stroke 可撤
           // 撤销上一笔 tap (如果是 draw 留下来的点)
           if (lt.stroke) {
             this.board.strokes = this.board.strokes.filter((x) => x !== lt.stroke);
