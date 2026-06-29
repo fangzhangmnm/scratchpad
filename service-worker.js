@@ -7,7 +7,7 @@
 //
 // v8 起：响应 .js 时改写 import URL 加 ?v=VERSION，绕开 iPad Safari WKWebView
 // 的 V8 bytecode cache (按 URL 索引，URL 没变就用旧 bytecode，即使 SW 返回了
-// 新内容也忽略)。详见 docs/pointer-and-pen-input.md / WebPaint 同款问题。
+// 新内容也忽略)。详见 docs/20260524-pointer-and-pen-input.md / WebPaint 同款问题。
 
 importScripts("./src/version.js");
 const CACHE_VERSION = self.SCRATCHPAD_VERSION;

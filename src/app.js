@@ -368,7 +368,7 @@ installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });
 })();
 
 // ---- Service worker: 四条 update 检测路径 + 手动 check + 版本水印 ----
-// 参考 docs/pwa-update-detection.md (WebPaint 范式)。
+// 参考 docs/20260529-pwa-update-detection.md (WebPaint 范式)。
 //   路径 1: registration.waiting (开机检查)
 //   路径 2: updatefound + statechange === "installed"
 //   路径 3: SW 主动 postMessage({ type: "asset-updated" })
@@ -408,7 +408,7 @@ if (versionLabel) {
 }
 
 // 模块顶层 register — 不放 window.load 里 (dynamic import 导致 load 已 fire 完，
-// listener 永不触发；详见 docs/pwa-update-detection.md §0)
+// listener 永不触发；详见 docs/20260529-pwa-update-detection.md §0)
 if ("serviceWorker" in navigator && !LOCAL_DEV_HOSTS.has(location.hostname)) {
   // 路径 3: SW 报告 asset 变了
   navigator.serviceWorker.addEventListener("message", (e) => {

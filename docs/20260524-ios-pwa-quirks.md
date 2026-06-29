@@ -179,7 +179,7 @@ load. Pair with `:root[data-theme="night"] { … }` and `@media
 
 ## Web Share / Clipboard
 
-See [export-share-clipboard.md](export-share-clipboard.md) for the
+See [20260524-export-share-clipboard.md](20260524-export-share-clipboard.md) for the
 full setup. Quick notes:
 
 - `navigator.share({files: [pngFile]})` — iOS 15+. Always feature-
@@ -196,7 +196,7 @@ full setup. Quick notes:
   not use in ScratchPad.
 - **Pencil 2 / Pro barrel-tap is NOT exposed to web JS.** No event
   fires for the double-tap-on-the-pencil-shell gesture. Don't try
-  to detect. See [pointer-and-pen-input.md](pointer-and-pen-input.md).
+  to detect. See [20260524-pointer-and-pen-input.md](20260524-pointer-and-pen-input.md).
 - Apple Pencil hover (iPad Pro M2+) generates `pointerenter` /
   `pointermove` with `pointerType === "pen"` and no `pointerdown`.
   Could be used for tool preview / cursor. Did not use.

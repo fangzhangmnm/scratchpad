@@ -1,7 +1,7 @@
 # PWA 更新检测 — 四条路径 + 手动 + 版本水印
 
 复用自 WebPaint v58-60 的同款经验
-(`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/pwa-update-detection.md`)
+(`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/20260529-pwa-update-detection.md`)
 在 ScratchPad v16 整套落地。**直接拷过去能用的范式**。
 
 ## TL;DR — 缺一个都会有用户抱怨

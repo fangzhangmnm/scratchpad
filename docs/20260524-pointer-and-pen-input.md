@@ -281,7 +281,7 @@ Cap stack at ~100 entries. Clear both stacks on `clearAll`.
 
 ## Pressure semantics — data layer, not render layer
 
-See [stroke-rendering.md](stroke-rendering.md) for the full saga.
+See [20260524-stroke-rendering.md](20260524-stroke-rendering.md) for the full saga.
 Short version: when the "pressure" toggle is OFF, write `1.0` into
 the pressure column of every point. Don't gate rendering on a flag.
 

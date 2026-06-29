@@ -34,7 +34,7 @@ export class Board {
     // iOS / iPad PWA：地址栏 / 状态栏推送或键盘弹出会改 visualViewport，但不一定
     // 触发 window.resize。如果不响应，canvas 内部 pixel buffer 还是旧尺寸被 CSS
     // 拉伸到新 viewport → 渲染像素和 clientX/Y 错位 → 笔迹和落点 drift。借鉴
-    // WebPaint v54 教训 (docs/canvas-resize.md)。
+    // WebPaint v54 教训 (docs/20260529-canvas-resize.md)。
     if (window.visualViewport) {
       window.visualViewport.addEventListener("resize", () => this.resize());
       window.visualViewport.addEventListener("scroll", () => this.resize());

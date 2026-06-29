@@ -150,7 +150,7 @@ iPad has no devtools so the failure is silent and total.
 3. **Inline error overlay.** From an inline `<script>` that runs
    BEFORE module load, register `window.onerror` +
    `onunhandledrejection`. Paint failures as a red bar across the top
-   of the screen. See [ios-pwa-quirks.md](ios-pwa-quirks.md).
+   of the screen. See [20260524-ios-pwa-quirks.md](20260524-ios-pwa-quirks.md).
 
 4. **Bump `CACHE_VERSION` aggressively.** Every change ships with a
    bump. Clients see "新版本" → reload → atomically pick up the
@@ -212,7 +212,7 @@ need to fully kill the PWA to pick it up. Defer features into modules
 to dodge this.
 
 Original WebPaint write-up:
-`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/ipad-coalesced-events.md`
+`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/20260527-ipad-coalesced-events.md`
 (section 3).
 
 ## What I'd do differently next time
