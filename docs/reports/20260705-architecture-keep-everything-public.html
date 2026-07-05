@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ScratchPad 架构审查 · "全员 public" 是缺口不是命名</title>
+<style>
+  :root{
+    --bg:#0f1113; --panel:#16191d; --panel2:#1c2025; --ink:#e8e6e1; --muted:#9aa0a8;
+    --line:#2a2f36; --accent:#3a86ff; --leak:#e5484d; --seam:#30a46c; --warn:#f5a524;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 24px 96px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  h1{font-size:30px;line-height:1.25;margin:12px 0 8px;font-weight:650}
+  h1 .em{color:var(--accent)}
+  .sub{color:var(--muted);font-size:16px;max-width:74ch}
+  .meta{margin-top:16px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .thesis{background:linear-gradient(180deg,#181c22,#14171b);border:1px solid var(--line);
+    border-left:3px solid var(--accent);border-radius:10px;padding:18px 22px;margin:28px 0 8px}
+  .thesis b{color:var(--ink)}
+  h2.section{font-size:13px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted);margin:52px 0 18px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  /* summary table */
+  table.map{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+  table.map th,table.map td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.map th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  code{font-family:var(--mono);font-size:.88em;background:#22262c;color:#d6dbe2;padding:1.5px 6px;border-radius:5px}
+  .leak-txt{color:var(--leak);font-family:var(--mono);font-size:.86em}
+  .seam-txt{color:var(--seam)}
+  /* cards */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin:26px 0;overflow:hidden}
+  .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+    padding:22px 26px 16px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .card-head h3{margin:0;font-size:20px;font-weight:620}
+  .card-head .cid{font-family:var(--mono);color:var(--accent);font-size:13px;margin-bottom:4px}
+  .badge{flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    padding:5px 11px;border-radius:999px;border:1px solid;white-space:nowrap;margin-top:4px}
+  .badge.strong{color:#8fe3b6;border-color:#245c41;background:#12291d}
+  .badge.worth{color:#a9c8ff;border-color:#274a7d;background:#111f33}
+  .badge.spec{color:#d6c08a;border-color:#5c4a20;background:#241d10}
+  .card-body{padding:22px 26px 26px}
+  .field{margin:16px 0}
+  .field .lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .files{display:flex;flex-wrap:wrap;gap:7px}
+  .files code{background:#22262c}
+  ul.tight{margin:6px 0 0;padding-left:20px}
+  ul.tight li{margin:4px 0}
+  /* before/after diagram */
+  .ba{display:grid;grid-template-columns:1fr 40px 1fr;gap:0;align-items:center;margin:18px 0 4px}
+  @media(max-width:720px){.ba{grid-template-columns:1fr;gap:14px}.ba .arrow{transform:rotate(90deg);margin:0 auto}}
+  .panelbox{background:#101317;border:1px solid var(--line);border-radius:10px;padding:16px 14px;min-height:170px}
+  .panelbox .cap{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:12px}
+  .cap.bad{color:var(--leak)} .cap.good{color:var(--seam)}
+  .arrow{color:var(--muted);text-align:center;font-size:22px}
+  .nodes{display:flex;flex-direction:column;gap:9px}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .mod{font-family:var(--mono);font-size:11.5px;padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:#181c21;color:#cdd3da;white-space:nowrap}
+  .mod.core{border-color:#3a4553;background:#1d232b;color:#e8e6e1}
+  .mod.store{border-color:#245c41;background:#122a1e;color:#8fe3b6}
+  .mod.leak{border-color:#5c2427;background:#2a1416;color:#f0a6a8}
+  .pierce{color:var(--leak);font-family:var(--mono);font-size:11px}
+  .via{color:var(--seam);font-family:var(--mono);font-size:11px}
+  .note{font-size:12.5px;color:var(--muted);margin-top:10px;font-style:italic}
+  .warncallout{background:#241d10;border:1px solid #5c4a20;border-radius:9px;padding:12px 15px;margin:16px 0;font-size:13.5px;color:#e6d3a3}
+  .del-test{background:#101317;border:1px dashed var(--line);border-radius:9px;padding:13px 16px;margin-top:14px;font-size:13.5px}
+  .del-test b{color:var(--seam);font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  /* top rec */
+  .toprec{background:linear-gradient(180deg,#14231a,#121a15);border:1px solid #245c41;border-radius:14px;padding:26px 28px;margin-top:22px}
+  .toprec h3{margin:0 0 6px;font-size:20px}
+  .toprec .pick{font-family:var(--mono);color:#8fe3b6;font-size:13px}
+  footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;font-family:var(--mono)}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:14px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">ScratchPad · 架构审查报告</div>
+  <h1>“全员 <span class="em">public</span>” 不是命名问题，<br>是<span class="em">缺失的接缝</span>被 TS 迁移照了出来</h1>
+  <p class="sub">TypeScript 迁移里那句“只能把所有成员保持 public”不是迁移的副作用——它是把早就存在的跨模块耦合翻译成了编译器能看见的形状。每一个被迫 public 的下划线成员，背后都是一个本该存在、却没有的<span class="seam-txt">接缝（seam）</span>。这份报告把那些泄漏映射成 4 个<b>深化（deepening）</b>候选。</p>
+  <div class="meta">生成：2026-07-05 · 关注面：Board / InputController / TextManager / export 的跨模块内部访问 · 无 CONTEXT.md / ADR（本仓库尚未建立） · 本文件为提议，非实现</div>
+</header>
+
+<div class="thesis">
+  <b>核心论点。</b> 用<b>删除测试（deletion test）</b>看每个泄漏：如果把泄漏点“封起来”，复杂度会消失，还是会在多个调用方之间重新冒出来？<code>board.strokes</code> 被 input / textbox / export 三方直接 <code>push</code> / <code>filter</code> / 赋值——把它设成 private，复杂度会立刻在三个模块里炸开（bbox 不变量、live↔commit 转换、文字块对账）。这说明缺的不是 <code>private</code> 关键字，而是一个<b>拥有“笔画文档”这件事的深模块</b>。其余三个泄漏同理，各对应一条没被切出来的接缝。</div>
+
+<h2 class="section">泄漏 → 缺失接缝 → 候选</h2>
+<table class="map">
+  <thead><tr><th>被迫 public 的泄漏</th><th>谁在伸手进去</th><th>缺失的接缝</th><th>候选</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="leak-txt">board.strokes</span><br><span style="color:var(--muted);font-size:12px">裸的可变数组</span></td>
+      <td><code>input</code> <code>textbox</code> <code>export</code><br>直接 <code>.push</code> / <code>= .filter()</code></td>
+      <td>没有模块<b>拥有</b>笔画文档 + bbox 不变量</td>
+      <td class="seam-txt">A — StrokeStore</td>
+    </tr>
+    <tr>
+      <td><span class="leak-txt">board.render = function(){…}</span><br><span style="color:var(--muted);font-size:12px">运行时改写方法</span></td>
+      <td><code>app</code> 猴补丁包住 render<br>塞进浮层同步 + HUD</td>
+      <td>没有“渲染后（after-render）”回调接缝</td>
+      <td class="seam-txt">B — 渲染观察者</td>
+    </tr>
+    <tr>
+      <td><span class="leak-txt">input._pushUndo(…)</span><br><span style="color:var(--muted);font-size:12px">下划线=“别从外面叫我”</span></td>
+      <td><code>app</code>（文字 onAdd/onDelete）<br>从外部推历史条目</td>
+      <td>撤销历史没有公共属主，被 InputController 顺手拿着</td>
+      <td class="seam-txt">C — History 模块</td>
+    </tr>
+    <tr>
+      <td><span class="leak-txt">board._bgColor / _inkColor</span><br><span style="color:var(--muted);font-size:12px">主题私有字段</span></td>
+      <td><code>export</code> 离屏重渲时读色</td>
+      <td>没有“场景快照（scene snapshot）”接缝；渲染循环两处重复</td>
+      <td class="seam-txt">D — renderScene 通道</td>
+    </tr>
+  </tbody>
+</table>
+<div class="legend">
+  <span><i class="sw" style="background:#5c2427"></i>泄漏 / 伸手穿透</span>
+  <span><i class="sw" style="background:#245c41"></i>接缝 / 经接口</span>
+  <span><i class="sw" style="background:#3a4553"></i>模块</span>
+</div>
+
+<!-- ============ CANDIDATE A ============ -->
+<h2 class="section">候选 A · 把“笔画文档”从 Board 神对象里切出来</h2>
+<div class="card">
+  <div class="card-head">
+    <div>
+      <div class="cid">Candidate A</div>
+      <h3>StrokeStore — 拥有 strokes 数组 + 所有变更 + bbox 不变量的深模块</h3>
+    </div>
+    <span class="badge strong">Strong</span>
+  </div>
+  <div class="card-body">
+    <div class="field"><div class="lab">Files</div>
+      <div class="files"><code>src/board.ts</code><code>src/input.ts</code><code>src/textbox.ts</code><code>src/export.ts</code>（新增 <code>src/stroke-store.ts</code>）</div>
+    </div>
+    <div class="field"><div class="lab">Problem</div>
+      <p style="margin:6px 0 0">Board 是个神对象：它同时是<b>笔画仓库</b>、<b>canvas 渲染器</b>、<b>选区/套索视觉状态</b>和<b>viewport</b>。因为它把 <code>strokes</code> 数组裸露出来，调用方绕过它的方法直接改数组——<code>input.ts</code> 里 <code>board.strokes.push(s)</code>（撤销重插）、<code>board.strokes = …filter(x!==lt.stroke)</code>（双击撤点）；<code>textbox.ts</code> 里 <code>board.strokes.push(stroke)</code> / <code>= …filter()</code>。于是“每条 stroke 必须有合法 bbox”“live 是 number[]、commit 后是 Float32Array”“文字块 vs 手写”的不变量散落在三个模块里。而且这堆纯几何逻辑（hitTest / 多边形选区 / bbox）挂在 Board 上，<b>要造一个真 <code>&lt;canvas&gt;</code> 才能实例化</b>（构造函数 getContext + resize + addEventListener），所以现在<b>无法 headless 单测</b>。</p>
+    </div>
+    <div class="field"><div class="lab">Solution</div>
+      <p style="margin:6px 0 0">把“笔画文档”这件事切进 <code>StrokeStore</code>：拥有私有的 <code>strokes</code>，对外只给一个小接口——<code>add(stroke)</code> / <code>remove(ids)</code> / <code>replace(strokes)</code> / <code>translate(strokes,dx,dy)</code> / <code>hitTest(x,y,r)</code> / <code>inPolygon(poly)</code> / <code>forEach(cb)</code> + 一个 <code>change</code> 事件；bbox 不变量在内部维护。Board 退化成“在 StrokeStore 上渲染一个 viewport + 管选区/套索的视觉状态”。input / textbox 改成调 store 方法，不再碰数组。<code>strokes</code> 随之变 private。</p>
+    </div>
+    <!-- before/after -->
+    <div class="ba">
+      <div class="panelbox">
+        <div class="cap bad">BEFORE · 三方穿透裸数组</div>
+        <div class="nodes">
+          <div class="row"><span class="mod core">Board（神对象）</span></div>
+          <div class="row" style="padding-left:14px"><span class="mod leak">strokes[]&nbsp;（public 可变）</span></div>
+          <div class="row"><span class="mod">input</span><span class="pierce">→ .push / =filter →</span></div>
+          <div class="row"><span class="mod">textbox</span><span class="pierce">→ .push / =filter →</span></div>
+          <div class="row"><span class="mod">export</span><span class="pierce">→ 读 .strokes →</span></div>
+        </div>
+        <div class="note">bbox 不变量 & live↔commit 规则散在 3 处；几何逻辑绑死 canvas → 不可单测。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panelbox">
+        <div class="cap good">AFTER · 单一属主，经接口</div>
+        <div class="nodes">
+          <div class="row"><span class="mod store">StrokeStore</span><span class="via">strokes 私有</span></div>
+          <div class="row" style="padding-left:14px"><span class="mod" style="font-size:10.5px">add · remove · translate · hitTest · inPolygon · change</span></div>
+          <div class="row"><span class="mod">input</span><span class="via">→ store.add/remove →</span></div>
+          <div class="row"><span class="mod">textbox</span><span class="via">→ store.add/remove →</span></div>
+          <div class="row"><span class="mod core">Board</span><span class="via">renders store</span></div>
+        </div>
+        <div class="note">bbox 不变量 & 几何集中在一处；接口即测试面 → headless 单测。</div>
+      </div>
+    </div>
+    <div class="field"><div class="lab">Benefits</div>
+      <ul class="tight">
+        <li><b>Locality：</b>“改一条 stroke 会怎样”只在 StrokeStore 里。bbox bug、选区几何 bug 全部收敛到一个文件。</li>
+        <li><b>Leverage：</b>input/textbox 拿到“加/删/移一批 stroke，bbox 自动对”的高杠杆接口，不再各自维护数组。</li>
+        <li><b>Tests：</b>接口即测试面。hitTest、多边形选区、bbox 上卷、撤销驱动的增删——全都能<b>不碰 DOM</b> 单测（今天做不到）。</li>
+        <li><b>直接消灭泄漏：</b><code>board.strokes</code> 变 private，6 处裸数组变更消失。</li>
+      </ul>
+    </div>
+    <div class="del-test"><b>Deletion test</b> · 删掉 StrokeStore → 笔画变更逻辑 + bbox 不变量重新炸回 board/input/textbox 三处。复杂度<b>集中</b>，不是被搬运 → 它挣得起自己的位置。</div>
+    <div class="warncallout">⚠️ 与家族风险分区一致：这是<b>内存态 app 层文档模型</b>，跟 <code>db.ts</code>（IndexedDB 持久化）和家族的云同步 store 库<b>无关</b>——ScratchPad 本就纯本地无云。StrokeStore 不是那条红线。</div>
+  </div>
+</div>
+
+<!-- ============ CANDIDATE B ============ -->
+<h2 class="section">候选 B · 用“渲染后”接缝替换 board.render 猴补丁</h2>
+<div class="card">
+  <div class="card-head">
+    <div><div class="cid">Candidate B</div>
+      <h3>渲染观察者 — Board.addRenderListener(fn)，取代运行时改写方法</h3></div>
+    <span class="badge strong">Strong</span>
+  </div>
+  <div class="card-body">
+    <div class="field"><div class="lab">Files</div><div class="files"><code>src/app.ts</code><code>src/board.ts</code></div></div>
+    <div class="field"><div class="lab">Problem</div>
+      <p style="margin:6px 0 0"><code>app.ts:337</code> 直接 <code>board.render = function(){ origRender(); textManager.updateOverlayTransform(); syncOverlay(); updateZoomLabel(); positionSelChip(); }</code>——运行时把一个方法整个换掉，只为在每帧后挂 4 件事。这是红旗：调用方为了插行为而<b>改写被调方的实现</b>；也让 <code>render</code> 永远不能变 private，且顺序耦合藏在补丁里。</p>
+    </div>
+    <div class="field"><div class="lab">Solution</div>
+      <p style="margin:6px 0 0">Board 暴露一个渲染后接缝：<code>addRenderListener(fn)</code>，在 <code>render()</code> 末尾依次调用已注册的监听器。app 注册它的“浮层同步 + HUD 更新”，不再重赋值方法。<code>render</code> 可收回成内部方法。</p>
+    </div>
+    <div class="ba">
+      <div class="panelbox">
+        <div class="cap bad">BEFORE · 猴补丁</div>
+        <div class="nodes">
+          <div class="row"><span class="mod">app</span><span class="pierce">board.render = fn</span></div>
+          <div class="row" style="padding-left:10px"><span class="mod leak">覆盖 Board.render</span></div>
+          <div class="row" style="padding-left:10px"><span class="mod" style="font-size:10.5px">origRender() + overlay + HUD + chip</span></div>
+        </div>
+        <div class="note">顺序 & 依赖藏在补丁里；render 不可 private。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panelbox">
+        <div class="cap good">AFTER · 监听器接缝</div>
+        <div class="nodes">
+          <div class="row"><span class="mod core">Board.render()</span><span class="via">末尾 fire listeners</span></div>
+          <div class="row"><span class="mod">app</span><span class="via">→ addRenderListener(overlay+HUD)</span></div>
+          <div class="row" style="padding-left:10px"><span class="mod" style="font-size:10.5px">未来任意订阅者可加，互不干扰</span></div>
+        </div>
+        <div class="note">render 变 private；一个真接缝，两个潜在适配器。</div>
+      </div>
+    </div>
+    <div class="field"><div class="lab">Benefits</div>
+      <ul class="tight">
+        <li><b>Locality：</b>“每帧后要干什么”从一段被覆盖的匿名函数，变成显式注册列表。</li>
+        <li><b>Leverage：</b>再有订阅者（如 minimap、性能计数）时直接 <code>addRenderListener</code>，不用叠补丁。</li>
+        <li><b>消灭泄漏：</b><code>render</code> 收回 private，去掉运行时方法改写这个红旗。</li>
+      </ul>
+    </div>
+    <div class="del-test"><b>Deletion test</b> · 接缝较浅（单一订阅者=假想接缝），但它消灭的是一个<b>确定的红旗</b>（运行时改写方法）。价值在“让 render 可封装”，而非杠杆。</div>
+  </div>
+</div>
+
+<!-- ============ CANDIDATE C ============ -->
+<h2 class="section">候选 C · 让撤销历史成为两个编辑器共享的属主</h2>
+<div class="card">
+  <div class="card-head">
+    <div><div class="cid">Candidate C</div>
+      <h3>History 模块 — 公共 push(entry)，替换跨模块的 input._pushUndo</h3></div>
+    <span class="badge worth">Worth exploring</span>
+  </div>
+  <div class="card-body">
+    <div class="field"><div class="lab">Files</div><div class="files"><code>src/input.ts</code><code>src/app.ts</code><code>src/textbox.ts</code>（新增 <code>src/history.ts</code>）</div></div>
+    <div class="field"><div class="lab">Problem</div>
+      <p style="margin:6px 0 0">撤销/重做栈住在 <code>InputController</code> 里，但文字块的增删（TextManager → app 的 onAdd/onDelete 回调）从外部调 <code>input._pushUndo({type:"add",…})</code> 把历史条目塞进去。下划线本意是“别从外面叫”，可它偏偏被外面叫。历史其实是<b>手写编辑</b>和<b>文字编辑</b>共享的关注点，却被 InputController 顺手拿着，没有干净属主。<code>UndoEntry</code> 类型已在 <code>types.ts</code>，说明数据早就是共享的。</p>
+    </div>
+    <div class="field"><div class="lab">Solution</div>
+      <p style="margin:6px 0 0">把 undo/redo 两个栈 + <code>push</code> / <code>undo</code> / <code>redo</code> / <code>clear</code> 提进 <code>History</code> 模块，<code>push(entry)</code> 是<b>正当的公共接口</b>。InputController、TextManager、选区移动都经 <code>history.push()</code>。<code>input._pushUndo</code> 的跨模块下划线调用消失。（条目的 apply/revert——撤销“add”=删 stroke、撤销“erase”=按原 id 重插——可留在一个 applier 里，由 History 驱动。）</p>
+    </div>
+    <div class="ba">
+      <div class="panelbox">
+        <div class="cap bad">BEFORE · 顺手拿着</div>
+        <div class="nodes">
+          <div class="row"><span class="mod core">InputController</span></div>
+          <div class="row" style="padding-left:10px"><span class="mod leak">undoStack / redoStack</span></div>
+          <div class="row"><span class="mod">app / textbox</span><span class="pierce">→ input._pushUndo →</span></div>
+        </div>
+        <div class="note">文字编辑从外面戳 input 的下划线方法。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panelbox">
+        <div class="cap good">AFTER · 共享属主</div>
+        <div class="nodes">
+          <div class="row"><span class="mod store">History</span><span class="via">push · undo · redo</span></div>
+          <div class="row"><span class="mod">input</span><span class="via">→ history.push →</span></div>
+          <div class="row"><span class="mod">textbox</span><span class="via">→ history.push →</span></div>
+        </div>
+        <div class="note">一个公共接口，两个真实适配器 → 真接缝。</div>
+      </div>
+    </div>
+    <div class="field"><div class="lab">Benefits</div>
+      <ul class="tight">
+        <li><b>Locality：</b>“撤销栈怎么长、封顶 100、新动作清 redo”只在 History 里。</li>
+        <li><b>Tests：</b>History 的 push/undo/redo 状态机可脱离 pointer 事件单测。</li>
+        <li><b>消灭泄漏：</b><code>_pushUndo</code> 从“下划线跨模块”变成 <code>history.push</code> 公共调用。</li>
+      </ul>
+    </div>
+    <div class="del-test"><b>Deletion test</b> · 中等。History 集中了撤销状态机；但 apply/revert 仍需 store+db 依赖，切得不够干净时收益会打折。先做 A 之后，apply 逻辑能干净地落在 StrokeStore 上，C 会顺很多——<b>建议 A 之后再做 C</b>。</div>
+  </div>
+</div>
+
+<!-- ============ CANDIDATE D ============ -->
+<h2 class="section">候选 D · Board 与 export 共享一条 renderScene 通道</h2>
+<div class="card">
+  <div class="card-head">
+    <div><div class="cid">Candidate D</div>
+      <h3>renderScene(ctx, scene) — 消掉重复渲染循环 + export 读私有色</h3></div>
+    <span class="badge worth">Worth exploring</span>
+  </div>
+  <div class="card-body">
+    <div class="field"><div class="lab">Files</div><div class="files"><code>src/board.ts</code><code>src/export.ts</code></div></div>
+    <div class="field"><div class="lab">Problem</div>
+      <p style="margin:6px 0 0"><code>export.ts</code> 的 <code>renderOffscreen</code> 和 <code>Board.render</code> 的手写笔画循环<b>重复</b>：都是“填背景 → 遍历 strokes → drawStroke(ink 色)”。为了离屏渲染，export 直接读 <code>board._bgColor</code> / <code>board._inkColor</code> 这两个私有色字段。重复 + 伸手，两个味道叠一起。</p>
+    </div>
+    <div class="field"><div class="lab">Solution</div>
+      <p style="margin:6px 0 0">抽出 <code>renderScene(ctx, { strokes, viewport, bgColor, inkColor })</code>——把 Board.render 和 export 都跑的那段收进一个纯函数。export 通过 Board 的 <code>snapshot()</code> 公共接缝拿 <code>{ strokes, colors }</code>，不再读私有字段。Board.render 也调 renderScene。</p>
+    </div>
+    <div class="ba">
+      <div class="panelbox">
+        <div class="cap bad">BEFORE · 重复 + 读私有</div>
+        <div class="nodes">
+          <div class="row"><span class="mod core">Board.render</span><span style="color:var(--muted);font-size:11px">循环 #1</span></div>
+          <div class="row"><span class="mod">export.renderOffscreen</span><span style="color:var(--muted);font-size:11px">循环 #2</span></div>
+          <div class="row"><span class="mod">export</span><span class="pierce">→ board._bgColor/_inkColor →</span></div>
+        </div>
+        <div class="note">同一段渲染逻辑两份；改一处易漏另一处。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panelbox">
+        <div class="cap good">AFTER · 一条通道 + 快照</div>
+        <div class="nodes">
+          <div class="row"><span class="mod store">renderScene(ctx,scene)</span></div>
+          <div class="row"><span class="mod core">Board</span><span class="via">→ renderScene</span></div>
+          <div class="row"><span class="mod">export</span><span class="via">→ board.snapshot() → renderScene</span></div>
+        </div>
+        <div class="note">渲染逻辑单源；私有色字段收回。</div>
+      </div>
+    </div>
+    <div class="field"><div class="lab">Benefits</div>
+      <ul class="tight">
+        <li><b>Locality：</b>笔画渲染规则单源；屏上/导出永远一致（WYSIWYG 更稳）。</li>
+        <li><b>消灭泄漏：</b><code>_bgColor</code> / <code>_inkColor</code> 收回 private，export 经 <code>snapshot()</code> 接缝拿数据。</li>
+        <li><b>Tests：</b><code>renderScene</code> 是纯函数（ctx 可 mock），可断言绘制调用序列。</li>
+      </ul>
+    </div>
+    <div class="del-test"><b>Deletion test</b> · 中等。主要消灭重复 + 一处伸手。与 A 有协同：A 落地后 <code>scene.strokes</code> 直接来自 StrokeStore 快照，D 更自然。</div>
+  </div>
+</div>
+
+<!-- ============ TOP REC ============ -->
+<h2 class="section">Top recommendation</h2>
+<div class="toprec">
+  <div class="pick">▶ 先做 Candidate A — StrokeStore</div>
+  <h3>它是根，另外三个是枝</h3>
+  <p style="margin:8px 0 0;color:#cfe6d8">四个泄漏里，<code>board.strokes</code> 是唯一被<b>三个</b>模块穿透的，也是唯一让一整片纯几何逻辑<b>无法 headless 单测</b>的。A 落地后：C 的 apply/revert 能干净地落在 StrokeStore 上（C 变顺）；D 的 <code>scene.strokes</code> 直接取自 store 快照（D 变自然）。B 独立、便宜、可随时单独做——如果想先拿一个“今天就清一个红旗”的小胜，B 是最低成本的起点，但它不解决根。</p>
+  <p style="margin:12px 0 0;color:#9fc4ad;font-size:14px">建议顺序：<b>A → D → C</b>，B 任意时机穿插。四个做完，报告开头那句“只能全 public”就被逐条兑现成 private：A 封 <code>strokes</code>、B 封 <code>render</code>、C 把 <code>_pushUndo</code> 变公共 <code>history.push</code>、D 封 <code>_bgColor/_inkColor</code>。</p>
+</div>
+
+<footer>
+  ScratchPad 架构审查 · 20260705 · 术语依 improve-codebase-architecture LANGUAGE.md（module/interface/depth/seam/leverage/locality/deletion-test）· 领域词依代码现状（本仓库暂无 CONTEXT.md，落地某候选时应懒创建并登记 StrokeStore / History 等新概念）· 本文件自包含、无 CDN（遵家族无外链规约）
+</footer>
+
+</div>
+</body>
+</html>
