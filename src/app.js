@@ -44,6 +44,9 @@ const els = {
   textOverlayInner: document.getElementById("textOverlayInner"),
   textEditorWrap: document.getElementById("textEditorWrap"),
   textEditor: document.getElementById("textEditor"),
+  selActions: document.getElementById("selActions"),
+  selDelete: document.getElementById("selDelete"),
+  selDone: document.getElementById("selDone"),
 };
 
 function safeLS(key, fallback) {
@@ -103,6 +106,8 @@ function setTool(t) {
   state.tool = t;
   for (const b of els.toolBtns) b.setAttribute("aria-pressed", b.dataset.tool === t ? "true" : "false");
   document.body.dataset.tool = t;
+  // 切离套索 → 弃选区 (高亮/chip 不残留到别的工具)
+  if (t !== "select") board.clearSelection();
   // 切到文字 → 后台懒加载 KaTeX (空载也安全)
   if (t === "text") ensureKatex().catch((err) => { console.error(err); setStatus("KaTeX 加载失败"); });
 }
@@ -325,6 +330,7 @@ board.render = function () {
   textManager.updateOverlayTransform();
   textManager.syncOverlay();
   updateZoomLabel();
+  positionSelChip();          // 选区 chip 跟随 pan/zoom/move
 };
 
 // Input controller
@@ -339,6 +345,27 @@ const input = new InputController(board, {
   onChange: () => {},
   status: setStatus,
 });
+
+// ---- 套索选区：board (几何/渲染) ↔ app (chip DOM / 文字浮层) 的挂接 ----
+// board 不认识 textManager / DOM；靠这两个回调回调 app 层。
+board.onStrokesMoved = () => textManager.refreshPositions();   // 移动后文字 DOM 跟上
+board.onSelectionChange = () => positionSelChip();
+
+// 选区浮动操作条：定位在选区上方居中 (顶部没空间就翻到下方)。空选区 / 非套索工具 → 藏。
+function positionSelChip() {
+  const bb = (state.tool === "select") ? board.selectionBBox() : null;
+  if (!bb) { els.selActions.classList.add("hidden"); return; }
+  const tl = board.worldToScreen(bb.x0, bb.y0);
+  const br = board.worldToScreen(bb.x1, bb.y1);
+  const cx = (tl.x + br.x) / 2;
+  let top = tl.y - 44;
+  if (top < 52) top = br.y + 8;                 // 选区顶部贴到顶栏 → chip 放下方
+  els.selActions.style.left = cx + "px";
+  els.selActions.style.top = top + "px";
+  els.selActions.classList.remove("hidden");
+}
+els.selDelete.addEventListener("click", () => input.deleteSelection());
+els.selDone.addEventListener("click", () => board.clearSelection());
 
 // 全局移动端护栏：防系统抢手势 + 防长按弹奇怪对话框 + 切后台清在途指针
 installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });

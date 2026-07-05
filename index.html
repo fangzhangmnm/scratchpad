@@ -67,6 +67,12 @@
     <!-- T 工具按下拖动时的预览矩形 -->
     <div id="textDraftRect" class="text-draft-rect hidden" aria-hidden="true"></div>
 
+    <!-- 套索选中后浮出的操作条 (删除 / 完成)，锚定在选区上方 -->
+    <div id="selActions" class="sel-actions hidden">
+      <button id="selDelete" type="button" class="sel-btn danger">删除</button>
+      <button id="selDone" type="button" class="sel-btn">完成</button>
+    </div>
+
     <!-- 顶栏：工具 + 状态 -->
     <header class="top-bar" id="topBar">
       <div class="tool-group" role="group" aria-label="tools">
@@ -97,6 +103,14 @@
             <polyline points="4 7 4 4 20 4 20 7"></polyline>
             <line x1="9" y1="20" x2="15" y2="20"></line>
             <line x1="12" y1="4" x2="12" y2="20"></line>
+          </svg>
+        </button>
+        <button class="tool" id="toolSelect" type="button" data-tool="select" title="选择 / 套索 (S)">
+          <!-- 套索：虚线环 + 绳尾 + 结 -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 10c0-3.3 3.6-6 8-6s8 2.7 8 6-3.6 6-8 6c-1.3 0-2.6-.2-3.8-.6" stroke-dasharray="2.4 2.4"></path>
+            <path d="M8.2 15.4c-1 .5-1.7 1.3-1.7 2.3 0 1.3 1.2 2.1 2.2 1.7"></path>
+            <circle cx="9" cy="19.6" r="1"></circle>
           </svg>
         </button>
       </div>
@@ -191,6 +205,6 @@
     <!-- version.js 必须早于 bundle 加载 (classic script，给 window.SCRATCHPAD_VERSION 水印) -->
     <script src="./src/version.js"></script>
     <!-- Built by scripts/build.sh → ./dist/scratchpad-<hash>.mjs (content-hashed，SW 按此名失效缓存) -->
-    <script type="module" src="./dist/scratchpad-ee4d9103816a.mjs"></script>
+    <script type="module" src="./dist/scratchpad-e5fb26670e83.mjs"></script>
   </body>
 </html>

@@ -150,6 +150,8 @@ export class InputController {
       for (const [pid, p] of this.pointers) {
         if (p.role === "draw") this.board.cancelStroke(pid);
         else if (p.role === "erase") this._commitErase();
+        else if (p.role === "lasso") this._abandonLasso();
+        else if (p.role === "sel-move") this._commitMove(p);
         // 在场的非掌触 touch 全升级成 gesture —— 包括先落的 hold/pan 指针。
         // 否则它们不算 gesture：tap 判定只看 gesture 指针，抬指顺序不对 (gesture 指
         // 先抬→remaining≠0) 双指 tap 就丢掉。这是"双指很难按出来"的根因。
@@ -161,6 +163,33 @@ export class InputController {
       });
       this._beginGesture();
       this._updateGestureTapSnapshot();
+      e.preventDefault();
+      return;
+    }
+
+    // 套索工具：单指/笔/鼠标左键拖 = 画选区多边形；拖点落在已有选区内 = 移动选区。
+    // 两指仍走上面的 gesture 分支平移缩放 (故选区拖动只单指)。几何全委托 board。
+    // 鼠标中/右键不进套索 → 落到下面 role 决策走平移 (跟其它工具一致)。
+    if (tool === "select" && !(e.pointerType === "mouse" && e.button !== 0)) {
+      const { x: wx, y: wy } = this.board.screenToWorld(x, y);
+      const bb = this.board.selectionBBox();
+      const insideSel = bb && wx >= bb.x0 && wx <= bb.x1 && wy >= bb.y0 && wy <= bb.y1;
+      if (insideSel) {
+        this.pointers.set(e.pointerId, {
+          pointerType: e.pointerType, role: "sel-move",
+          x, y, startX: x, startY: y, lastX: x, lastY: y,
+          totalDx: 0, totalDy: 0, moved: false, downTime: performance.now(),
+        });
+      } else {
+        this.board.clearSelection();          // 新套索：先弃旧选区
+        this._lassoPts = [wx, wy];
+        this.board.setLasso(this._lassoPts);
+        this.pointers.set(e.pointerId, {
+          pointerType: e.pointerType, role: "lasso",
+          x, y, startX: x, startY: y, downTime: performance.now(),
+        });
+      }
+      this.canvas.setPointerCapture?.(e.pointerId);
       e.preventDefault();
       return;
     }
@@ -270,6 +299,34 @@ export class InputController {
       return;
     }
 
+    if (rec.role === "lasso") {
+      // 追加套索顶点 (世界坐标)。距离门限省点，够平滑即可。
+      if (this._lassoPts) {
+        const { x: wx, y: wy } = this.board.screenToWorld(e.clientX, e.clientY);
+        const n = this._lassoPts.length;
+        const ldx = wx - this._lassoPts[n-2], ldy = wy - this._lassoPts[n-1];
+        const minW = 2 / this.board.viewport.scale;   // ~2 屏幕 px
+        if (ldx*ldx + ldy*ldy >= minW*minW) {
+          this._lassoPts.push(wx, wy);
+          this.board.setLasso(this._lassoPts);
+        }
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if (rec.role === "sel-move") {
+      const dxS = e.clientX - rec.lastX, dyS = e.clientY - rec.lastY;
+      rec.lastX = e.clientX; rec.lastY = e.clientY;
+      const scale = this.board.viewport.scale;
+      const dx = dxS / scale, dy = dyS / scale;
+      this.board.translateStrokes(this.board.selection, dx, dy);
+      rec.totalDx += dx; rec.totalDy += dy;
+      if (Math.hypot(e.clientX - rec.startX, e.clientY - rec.startY) > 3) rec.moved = true;
+      e.preventDefault();
+      return;
+    }
+
     if (rec.role === "draw") {
       // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑 + 距离门限
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
@@ -371,6 +428,16 @@ export class InputController {
       } else {
         this.onTextDismiss();
       }
+      return;
+    }
+
+    if (rec.role === "lasso") {
+      if (cancelled) this._abandonLasso();
+      else this._finishLasso();
+      return;
+    }
+    if (rec.role === "sel-move") {
+      if (!cancelled) this._commitMove(rec);
       return;
     }
 
@@ -564,6 +631,7 @@ export class InputController {
       if (p.role === "draw") this.board.cancelStroke(pid);
     }
     this.eraseSession = null;
+    this._abandonLasso();          // 在途套索丢弃 (已 commit 的选区保留)
     this.pointers.clear();
     this._endGesture();
     this._gestureTap = null;
@@ -603,6 +671,55 @@ export class InputController {
     }).catch((err) => {
       console.error("deleteStrokes failed", err);
       this.status("擦除保存失败");
+    });
+  }
+
+  // ---- 套索选区 ----
+  // 松手：套索多边形 → 选中集。太小 (几乎是点击) → 只清选区。
+  _finishLasso() {
+    const pts = this._lassoPts;
+    this._lassoPts = null;
+    this.board.setLasso(null);
+    if (!pts || pts.length < 6) { this.board.clearSelection(); return; }
+    const hits = this.board.strokesInPolygon(pts);
+    this.board.setSelection(hits);
+    this.status(hits.length ? `已选 ${hits.length} 项` : "空选区");
+  }
+  _abandonLasso() {
+    this._lassoPts = null;
+    this.board.setLasso(null);
+  }
+  // 移动选区收尾：持久化每个 moved stroke + 推 move 撤销。没真移动就不记。
+  _commitMove(rec) {
+    if (!rec) return;
+    const dx = rec.totalDx, dy = rec.totalDy;
+    rec.totalDx = 0; rec.totalDy = 0;
+    if (!dx && !dy) return;
+    const strokes = this.board.selection.slice();
+    if (!strokes.length) return;
+    if (!rec.moved) {
+      // 点击/抖动级位移 (<阈值)：撤回内存里那点漂移，别落库别记 undo (免内存↔DB 不一致)。
+      this.board.translateStrokes(strokes, -dx, -dy);
+      return;
+    }
+    for (const s of strokes) putStrokeWithId(s).catch((err) => console.error("move save failed", err));
+    this._pushUndo({ type: "move", strokes, dx, dy });
+    this.onChange();
+  }
+  // 删除选区 (键盘 Delete / chip)。复用 erase 撤销类型：undo 会原样插回、文字浮层自动对账。
+  deleteSelection() {
+    const strokes = this.board.selection.slice();
+    if (!strokes.length) return;
+    const ids = strokes.map((s) => s.id).filter((x) => x != null);
+    this.board.clearSelection();
+    this.board.removeStrokesByIds(ids);
+    deleteStrokes(ids).then(() => {
+      this._pushUndo({ type: "erase", strokes });
+      this.onChange();
+      this.status(`已删除 ${strokes.length} 项`);
+    }).catch((err) => {
+      console.error("deleteSelection failed", err);
+      this.status("删除失败");
     });
   }
 
@@ -646,10 +763,21 @@ export class InputController {
       e.preventDefault();
       return;
     }
+    if ((e.key === "Delete" || e.key === "Backspace") && this.board.selection.length) {
+      this.deleteSelection();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "Escape" && this.board.selection.length) {
+      this.board.clearSelection();
+      e.preventDefault();
+      return;
+    }
     if (e.key === "p" || e.key === "P") this._emitTool("pen");
     else if (e.key === "e" || e.key === "E") this._emitTool("eraser");
     else if (e.key === "h" || e.key === "H") this._emitTool("hand");
     else if (e.key === "t" || e.key === "T") this._emitTool("text");
+    else if (e.key === "s" || e.key === "S") this._emitTool("select");
     else if (e.key === "g" || e.key === "G") this._emitGridCycle();
     else if (e.key === "0") this.board.resetViewport();
     else if (e.key === "=" || e.key === "+") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.2);
@@ -688,6 +816,9 @@ export class InputController {
         this.board.strokes.push(s);
       }
       this.board.requestRender();
+    } else if (e.type === "move") {
+      this.board.translateStrokes(e.strokes, -e.dx, -e.dy);
+      for (const s of e.strokes) putStrokeWithId(s).catch(() => {});
     }
     this.redoStack.push(e);
     this._emitHistChange();
@@ -706,6 +837,9 @@ export class InputController {
       const ids = e.strokes.map((s) => s.id).filter((x) => x != null);
       await deleteStrokes(ids).catch(() => {});
       this.board.removeStrokesByIds(ids);
+    } else if (e.type === "move") {
+      this.board.translateStrokes(e.strokes, e.dx, e.dy);
+      for (const s of e.strokes) putStrokeWithId(s).catch(() => {});
     }
     this.undoStack.push(e);
     this._emitHistChange();

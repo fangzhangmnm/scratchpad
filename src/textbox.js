@@ -216,6 +216,15 @@ export class TextManager {
     });
   }
 
+  // 套索移动 / move undo 改了 text stroke 的 x/y → 把 DOM transform 重新对齐。
+  // (syncOverlay 只增删元素，不动已有元素位置；位置只在 _renderStroke 时写一次。)
+  refreshPositions() {
+    for (const [id, el] of this.elById) {
+      const s = this.board.strokes.find((x) => x.id === id);
+      if (s && s.type === "text") el.style.transform = `translate(${s.x}px, ${s.y}px)`;
+    }
+  }
+
   removeStrokeFromOverlay(strokeId) {
     const el = this.elById.get(strokeId);
     if (el) el.remove();

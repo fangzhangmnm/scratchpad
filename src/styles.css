@@ -85,6 +85,35 @@ body[data-tool="hand"] .board { cursor: grab; }
 body[data-panning="1"] .board { cursor: grabbing !important; }
 body[data-tool="eraser"] .board { cursor: cell; }
 body[data-tool="text"] .board { cursor: text; }
+body[data-tool="select"] .board { cursor: crosshair; }
+
+/* 套索选区浮动操作条：锚点由 JS 设 (选区上方居中)，transform 把自身拉回居中 */
+.sel-actions {
+  position: fixed;
+  z-index: 16;                 /* 高于文字浮层(5)，低于顶栏/HUD(10) 无妨——它在画布上方 */
+  display: flex;
+  gap: 6px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.sel-actions.hidden { display: none; }
+.sel-btn {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 6px 15px;
+  font: 500 13px/1 inherit;
+  color: var(--ink);
+  background: var(--bg-soft);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sel-btn.danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.sel-btn:active { transform: translateY(1px); }
 
 /* ---- 文字 + LaTeX 浮层 ---- */
 .text-overlay {

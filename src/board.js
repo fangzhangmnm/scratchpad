@@ -28,6 +28,15 @@ export class Board {
     this._inkColor = "#1b1b1b";
     this._bgColor = "#f6f4ef";
     this._gridColor = "#d8d2c4";
+    this._selColor = "#3a86ff";         // 套索 / 选区高亮色 (主题无关，够醒目即可)
+
+    // ---- 选区 (套索工具) ----
+    // selection = 已选中的 stroke 对象数组 (手写 + 文字混装，都靠 id + bbox 统一处理)。
+    // _lassoWorld = 正在拖的套索多边形 (世界坐标 flat [x,y,...])，松手即清。
+    this.selection = [];
+    this._lassoWorld = null;
+    this.onSelectionChange = null;      // app 层挂：选区变了 → 重定位删除 chip
+    this.onStrokesMoved = null;         // app 层挂：translateStrokes 后 → 刷新文字 DOM 位置
 
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -208,6 +217,91 @@ export class Board {
     this.requestRender();
   }
 
+  // ---- 选区 (套索) —— 几何深模块 ----
+  //
+  // 两条 subtype-无关的原语，套索交互全走这两条，input 层不碰"手写 vs 文字"的差异：
+  //   1) strokesInPolygon(poly)     区域命中 → 选中集 (hitStrokesAt 的"面"版本)
+  //   2) translateStrokes(ss,dx,dy) 平移一批 stroke —— 唯一知道"某类 stroke 世界坐标怎么挪"的地方
+  //
+  // 命中语义：手写 = 任一采样点落在多边形内 (你套住了它的一部分)；
+  //          文字 = bbox 中心落在多边形内。都先用 bbox 快筛。
+
+  // poly = 世界坐标 flat 数组 [x0,y0,x1,y1,...]。返回选中的 stroke 对象数组。
+  strokesInPolygon(poly) {
+    if (!poly || poly.length < 6) return [];   // 至少 3 点才成面
+    let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+    for (let i = 0; i < poly.length; i += 2) {
+      if (poly[i]   < px0) px0 = poly[i];
+      if (poly[i]   > px1) px1 = poly[i];
+      if (poly[i+1] < py0) py0 = poly[i+1];
+      if (poly[i+1] > py1) py1 = poly[i+1];
+    }
+    const hits = [];
+    for (const s of this.strokes) {
+      // bbox 快筛：完全在套索 bbox 外的直接跳过
+      if (s.bbox[2] < px0 || s.bbox[0] > px1 || s.bbox[3] < py0 || s.bbox[1] > py1) continue;
+      if (s.type === "text") {
+        const cx = (s.bbox[0] + s.bbox[2]) / 2;
+        const cy = (s.bbox[1] + s.bbox[3]) / 2;
+        if (pointInPolygon(cx, cy, poly)) hits.push(s);
+        continue;
+      }
+      const p = s.points;
+      const N = p.length / 3;
+      for (let i = 0; i < N; i++) {
+        if (pointInPolygon(p[i*3], p[i*3+1], poly)) { hits.push(s); break; }
+      }
+    }
+    return hits;
+  }
+
+  // 唯一的"移动 stroke"choke point。dx/dy = 世界坐标增量。就地改 points/x/y + bbox。
+  // 手写 stroke 的 points 是 Float32Array (已 commit)，就地加即可；文字改 x/y。
+  translateStrokes(strokes, dx, dy) {
+    if (!dx && !dy) return;
+    for (const s of strokes) {
+      if (s.type === "text") {
+        s.x += dx; s.y += dy;
+      } else {
+        const p = s.points;
+        for (let i = 0; i < p.length; i += 3) { p[i] += dx; p[i+1] += dy; }
+      }
+      s.bbox = [s.bbox[0] + dx, s.bbox[1] + dy, s.bbox[2] + dx, s.bbox[3] + dy];
+    }
+    if (this.onStrokesMoved) this.onStrokesMoved();   // 文字 DOM 位置跟着挪
+    this.requestRender();
+  }
+
+  setSelection(strokes) {
+    this.selection = strokes || [];
+    if (this.onSelectionChange) this.onSelectionChange();
+    this.requestRender();
+  }
+  clearSelection() {
+    if (!this.selection.length && !this._lassoWorld) return;
+    this.selection = [];
+    this._lassoWorld = null;
+    if (this.onSelectionChange) this.onSelectionChange();
+    this.requestRender();
+  }
+  // 选区并集 bbox (世界坐标)；空选区返回 null。命中测试"拖点在选区内 → 移动"用。
+  selectionBBox() {
+    if (!this.selection.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of this.selection) {
+      if (s.bbox[0] < x0) x0 = s.bbox[0];
+      if (s.bbox[1] < y0) y0 = s.bbox[1];
+      if (s.bbox[2] > x1) x1 = s.bbox[2];
+      if (s.bbox[3] > y1) y1 = s.bbox[3];
+    }
+    return { x0, y0, x1, y1 };
+  }
+  // 套索拖动中的多边形 (世界坐标 flat)。null = 没在拖。
+  setLasso(worldPoly) {
+    this._lassoWorld = worldPoly;
+    this.requestRender();
+  }
+
   // 整体 bbox (导出 "全部内容" 用)
   computeBoundingBox() {
     if (!this.strokes.length) return null;
@@ -272,6 +366,51 @@ export class Board {
     }
     for (const s of this.liveStrokes.values()) {
       this._drawStroke(s);
+    }
+
+    this._drawSelection();
+  }
+
+  // 选中 stroke 的 bbox 高亮 + 正在拖的套索多边形。都在屏幕坐标画 (由 world bbox 换算)，
+  // 手写和文字统一走 bbox → 文字块也一样描框。
+  _drawSelection() {
+    const ctx = this.ctx;
+    const { tx, ty, scale } = this.viewport;
+
+    if (this.selection.length) {
+      ctx.save();
+      ctx.strokeStyle = this._selColor;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      const pad = 4;   // 屏幕 px：框比内容略大一圈，好看清
+      for (const s of this.selection) {
+        const x = s.bbox[0] * scale + tx - pad;
+        const y = s.bbox[1] * scale + ty - pad;
+        const w = (s.bbox[2] - s.bbox[0]) * scale + pad * 2;
+        const h = (s.bbox[3] - s.bbox[1]) * scale + pad * 2;
+        ctx.strokeRect(x, y, w, h);
+      }
+      ctx.restore();
+    }
+
+    const poly = this._lassoWorld;
+    if (poly && poly.length >= 4) {
+      ctx.save();
+      ctx.strokeStyle = this._selColor;
+      ctx.fillStyle = this._selColor;
+      ctx.globalAlpha = 0.10;
+      ctx.beginPath();
+      ctx.moveTo(poly[0] * scale + tx, poly[1] * scale + ty);
+      for (let i = 2; i < poly.length; i += 2) {
+        ctx.lineTo(poly[i] * scale + tx, poly[i+1] * scale + ty);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
@@ -481,6 +620,21 @@ function segDistSq(px, py, ax, ay, bx, by) {
   const cx = ax + t * dx, cy = ay + t * dy;
   const ex = px - cx, ey = py - cy;
   return ex*ex + ey*ey;
+}
+
+// 射线法：点 (px,py) 是否在多边形 poly (flat [x,y,...]) 内。
+function pointInPolygon(px, py, poly) {
+  let inside = false;
+  const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = poly[i*2], yi = poly[i*2+1];
+    const xj = poly[j*2], yj = poly[j*2+1];
+    if (((yi > py) !== (yj > py)) &&
+        (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 function ensureBbox(s) {
