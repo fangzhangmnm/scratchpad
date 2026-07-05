@@ -2,3 +2,14 @@ journals/
 .DS_Store
 *.log
 node_modules/
+
+# 构建工具（跨 OS 不通用、10MB）：build.sh 没找到会自动 curl 一份。
+# tools/ = 构建工具（gitignored）；src/vendor/ = 运行时 lib（入 git）。
+tools/esbuild/
+
+# build 中间产物（最终 dist/scratchpad-<hash>.mjs 入 git，供 deploy.yml 组合上 Pages）
+dist/scratchpad-tmp.mjs
+dist/scratchpad-tmp.mjs.map
+
+# Claude Code session 区（worktree / 本地设置），不入库
+.claude/

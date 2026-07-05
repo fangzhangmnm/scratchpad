@@ -1,37 +1,31 @@
-// SW: cache-first + 后台 revalidate + 改了通知页面（toast）。
-// 版本号在 src/version.js 单一来源；SW 这边 importScripts 进来。
-// 改了任何 precached asset 就到 version.js bump CACHE_VERSION。
+// SW（bundle 后重写）：整个站只剩 1 个 hash-named bundle，缓存失效**自动**通过文件名差异
+// 解决。老花招（version.js 合成 CACHE_VERSION / import URL rewrite）全删。
 //
-// ScratchPad 是纯本地，没有任何运行时跨源请求 — vendor 也在仓库里。
-// 所以 SW 只关心同源即可。
+// 设计：
+//   - install：fetch index.html → 抠出当前 bundle 文件名 → precache 入口 + bundle + statics
+//   - cache name = "scratchpad-<bundleHash>"。新 bundle = 新 cache name；activate 时清老的。
+//   - fetch：cache-first(prod) / network-first(dev) + 后台 revalidate；ETag 变了通知 page。
 //
-// v8 起：响应 .js 时改写 import URL 加 ?v=VERSION，绕开 iPad Safari WKWebView
-// 的 V8 bytecode cache (按 URL 索引，URL 没变就用旧 bytecode，即使 SW 返回了
-// 新内容也忽略)。详见 docs/20260524-pointer-and-pen-input.md / WebPaint 同款问题。
+// 抄自 sibling canonical（`../20260524 WebPaint/service-worker.js`），**与它逐字对齐**——
+// 只差两处：① scratchpad- 名（vs webpaint-）② STATIC_PRECACHE 列表。改 canonical 时把新逻辑
+// 照拷回来即可（diff 应仍只剩这两处 + 本头注）。ScratchPad 纯本地无云、无跨源请求、无
+// passthrough 红线，故 fetch handler 与 WebPaint 逐字同（无 .glb/.gltf 那类 passthrough）。
+//
+// STATIC_PRECACHE = PWA 壳 + styles + version.js（水印）+ vendor 库（jspdf/html2canvas/katex）。
+//   vendor 虽懒加载，仍预缓存：装 PWA 第一次就能离线导出 / 用文字（ScratchPad offline-first）。
 
-importScripts("./src/version.js");
-const CACHE_VERSION = self.SCRATCHPAD_VERSION;
-const CACHE_NAME = `scratchpad-${CACHE_VERSION}`;
-
-const PRECACHE_URLS = [
+const STATIC_PRECACHE = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./icon.svg",
-  "./apple-touch-icon-180.png",
   "./icon-192.png",
   "./icon-512.png",
+  "./apple-touch-icon-180.png",
   "./src/styles.css",
   "./src/version.js",
-  "./src/app.js",
-  "./src/board.js",
-  "./src/input.js",
-  "./src/db.js",
-  "./src/export.js",
-  "./src/textbox.js",
   "./src/vendor/jspdf.umd.min.js",
   "./src/vendor/html2canvas/html2canvas.min.js",
-  // KaTeX vendor (懒加载，但 SW 预缓存：装 PWA 第一次就能离线用文字)
   "./src/vendor/katex/katex.min.js",
   "./src/vendor/katex/katex.min.css",
   "./src/vendor/katex/fonts/KaTeX_AMS-Regular.woff2",
@@ -56,26 +50,36 @@ const PRECACHE_URLS = [
   "./src/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2",
 ];
 
-// .js module 走 import-URL 改写。vendor/ 是 UMD 不用改 (没有 ES import)。
-function isJSModule(url) {
-  return url.pathname.endsWith(".js")
-    && url.pathname.includes("/src/")
-    && !url.pathname.includes("/vendor/");
-}
+let CACHE_NAME = "scratchpad-boot";   // install 时会被替换为 scratchpad-<bundleHash>
 
-// 把源码里 `from "./xxx.js"` 和 `import("./xxx.js")` 改成 `?v=VERSION`。
-// 版本变 = URL 变 = bytecode 缓存键变 = 强制重编译。
-function rewriteImports(text) {
-  const v = `?v=${CACHE_VERSION}`;
-  return text
-    .replace(/(\bfrom\s+)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`)
-    .replace(/(\bimport\s*\(\s*)(["'])(\.[^"'?]+\.js)(["'])/g, `$1$2$3${v}$4`);
+// 同一个 SW 文件部署到 /(prod) 和 /dev/ 两处；按**自己的作用域**选策略：
+//   - prod(scope=/)      → cache-first：秒开 + 离线稳，更新靠 asset-updated toast。
+//   - dev(scope 含 /dev/) → network-first：在线永远先抓网（「改完即见」/强制更新不变），离线才回退缓存
+//     （崩溃后能离线重开——修「/dev/ 按设计无 SW → 闪退离线打不开」的坑）。
+const SCOPE_IS_DEV = self.location.pathname.includes("/dev/");
+
+async function getCurrentBundleUrl() {
+  const res = await fetch("./index.html", { cache: "no-store" });
+  if (!res.ok) throw new Error("install: index.html fetch failed " + res.status);
+  const html = await res.text();
+  // <script type="module" src="./dist/scratchpad-<hash>.mjs"></script>
+  const m = html.match(/src="(\.\/dist\/scratchpad-[a-z0-9-]+\.mjs)"/i);
+  if (!m) throw new Error("install: 找不到 ./dist/scratchpad-*.mjs 入口 in index.html");
+  return { html, bundleUrl: m[1] };
 }
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
+    const { bundleUrl } = await getCurrentBundleUrl();
+    const bundleHash = bundleUrl.match(/scratchpad-([a-z0-9-]+)\.mjs/i)?.[1] || "boot";
+    CACHE_NAME = `scratchpad-${bundleHash}`;
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(PRECACHE_URLS);
+    const urls = [...STATIC_PRECACHE, bundleUrl, bundleUrl + ".map"];
+    await Promise.all(urls.map((u) =>
+      fetch(u, { cache: "no-store" })
+        .then((r) => r.ok ? cache.put(u, r) : null)
+        .catch((err) => console.warn("[SW] precache miss", u, err.message))
+    ));
     await self.skipWaiting();
   })());
 });
@@ -103,67 +107,56 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // 跨源 (新版本检测之类) → passthrough
   if (url.origin !== self.location.origin) return;
-
-  event.respondWith((async () => {
-    // version.js：SW 直接合成响应，永远是本 SW 自己的 CACHE_VERSION。
-    // 保证 page 拿到的版本号 ≡ 当前 controller 的 CACHE_VERSION，不会因为
-    // 缓存中遗留的旧 version.js 内容而漂移。
-    if (url.pathname.endsWith("/src/version.js")) {
-      return new Response(
-        `self.SCRATCHPAD_VERSION = "${CACHE_VERSION}";\n`,
-        { headers: {
-            "Content-Type": "application/javascript",
-            "Cache-Control": "no-store",
-          } }
-      );
-    }
-
-    const cache = await caches.open(CACHE_NAME);
-    // ignoreSearch：cache 按裸 URL 存；带 ?v=N 的请求也能命中
-    const cached = await cache.match(req, { ignoreSearch: true });
-    // 拿网络 / 写 cache 都按裸 URL
-    const bareReq = new Request(url.origin + url.pathname);
-
-    const network = fetch(bareReq).then((resp) => {
-      if (resp && resp.ok) {
-        if (cached) {
-          const cE = cached.headers.get("etag");
-          const fE = resp.headers.get("etag");
-          const cL = cached.headers.get("content-length");
-          const fL = resp.headers.get("content-length");
-          const changed = (cE && fE && cE !== fE) || (!cE && cL && fL && cL !== fL);
-          if (changed) notifyUpdate(req.url).catch(() => {});
-        }
-        cache.put(bareReq, resp.clone()).catch(() => {});
-      }
-      return resp;
-    }).catch(() => null);
-
-    async function maybeRewrite(resp) {
-      if (!resp || !isJSModule(url)) return resp;
-      const text = await resp.text();
-      const rewritten = rewriteImports(text);
-      return new Response(rewritten, {
-        status: resp.status,
-        headers: { "Content-Type": "application/javascript" },
-      });
-    }
-
-    if (cached) {
-      network.catch(() => {});
-      return await maybeRewrite(cached.clone());
-    }
-    const resp = await network;
-    if (resp) return await maybeRewrite(resp.clone());
-    if (req.mode === "navigate") {
-      const fallback = await cache.match("./index.html");
-      if (fallback) return fallback;
-    }
-    return new Response("offline & not cached", { status: 503 });
-  })());
+  // prod 根 SW(scope=/)不碰 /dev/——留给 /dev/ 作用域的 dev SW 自己处理。
+  if (!SCOPE_IS_DEV && url.pathname.includes("/dev/")) return;
+  event.respondWith(SCOPE_IS_DEV ? networkFirst(req) : cacheFirst(req));
 });
+
+// prod：cache-first + 后台 revalidate（ETag/长度变 → 通知 page 弹更新 toast）。
+async function cacheFirst(req) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(req, { ignoreSearch: true });
+  const networkPromise = fetch(req).then((resp) => {
+    if (resp && resp.ok) {
+      if (cached) {
+        const cE = cached.headers.get("etag"), fE = resp.headers.get("etag");
+        const cL = cached.headers.get("content-length"), fL = resp.headers.get("content-length");
+        const changed = (cE && fE && cE !== fE) || (!cE && cL && fL && cL !== fL);
+        if (changed) notifyUpdate(req.url).catch(() => {});
+      }
+      cache.put(req, resp.clone()).catch(() => {});   // hash-named bundle 内容不变；其它文件更新则刷一次
+    }
+    return resp;
+  }).catch(() => null);
+  if (cached) { networkPromise.catch(() => {}); return cached; }
+  const resp = await networkPromise;
+  if (resp) return resp;
+  return navFallback(req, cache);
+}
+
+// dev：network-first——在线永远拿最新（「改完即见」/强制更新不变），离线才回退缓存（崩溃后能离线重开）。
+async function networkFirst(req) {
+  const cache = await caches.open(CACHE_NAME);
+  try {
+    const resp = await fetch(req);
+    if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});   // 顺手刷缓存，供下次离线回退
+    return resp;
+  } catch {
+    const cached = await cache.match(req, { ignoreSearch: true });
+    if (cached) return cached;
+    return navFallback(req, cache);
+  }
+}
+
+// 导航请求离线且未命中 → 回退缓存的 index.html（PWA 壳）；否则 503。
+async function navFallback(req, cache) {
+  if (req.mode === "navigate") {
+    const fallback = await cache.match("./index.html");
+    if (fallback) return fallback;
+  }
+  return new Response("offline & not cached", { status: 503 });
+}
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "skip-waiting") self.skipWaiting();
