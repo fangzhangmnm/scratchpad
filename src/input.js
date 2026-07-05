@@ -38,6 +38,12 @@ const GESTURE_TAP_MAX_MOVE_SQ = 256;   // 16 px²
 // 凑成"两指"→ 松手时误判成双指撤销。新触点落下前，清掉超过此时长没动过的旧 touch。
 const GHOST_POINTER_TIMEOUT_MS = 1500;
 
+// 掌触防误撤销：手掌搁屏 = ≥2 个 touch 触点，与真双指物理不可分。写字前后手掌一抖/闪灭
+// 就凑成"双指 tap"→ 误 undo。策略：笔尖活动（落/移/抬）后这段时间内的多指 tap 一律
+// 视作掌触 flicker，吞掉不撤销/重做。写字节奏里手掌抖动全落此窗口；真想撤销时笔尖离屏
+// > 此时长再双指 tap 照常生效。只挡 tap，pinch/pan 缩放平移不受影响。
+const PALM_PEN_GUARD_MS = 600;
+
 // 触屏单指 pan 死区：手指移动超过此距离才真正开始平移。让"双指 tap 撤销"里先落的
 // 那根手指在第二指到来前不把画面挪走 → 双指 tap 零位移、和 panning 不再打架。
 const PAN_TOUCH_DEADZONE_SQ = 36;   // 6 px²
@@ -80,6 +86,7 @@ export class InputController {
     this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
     this.redoStack = [];
     this._lastTap = null;         // {time, x, y, stroke?} — pen 或 touch 都记
+    this._lastPenActivity = -Infinity;  // 最近一次笔尖落/移/抬的时刻 (ms)。掌触 tap 门用
 
     this._bind();
   }
@@ -111,6 +118,11 @@ export class InputController {
     this._purgeStalePointers();
     if (e.pointerType === "pen") {
       this.penEverSeen = true;
+      // 笔尖落下 = 权威信号：之前所有 touch 都是掌触，立即清（即使没收到 up）。抄 WebPaint
+      // input.ts:_purgeAllTouches。比 stale purge 激进：不管多久，pen down 就清掉挂着的掌触点，
+      // 免得它们抬起时凑成假双指 tap 误撤销。
+      this._purgeAllTouches();
+      this._lastPenActivity = performance.now();
       // pen 落下立即作废任何挂起的 touch tap：
       // 防止 "手指 tap → pen 短笔 → 手指 tap" 三段误判成 finger 双击
       this._lastTap = null;
@@ -230,6 +242,7 @@ export class InputController {
     rec.x = e.clientX;
     rec.y = e.clientY;
     rec.lastSeen = performance.now();   // ghost 自愈用：心跳，证明这指针还活着
+    if (rec.pointerType === "pen") this._lastPenActivity = rec.lastSeen;  // 掌触 tap 门
 
     if (this.gestureStart) {
       this._updateGesture();
@@ -312,6 +325,7 @@ export class InputController {
     this.pointers.delete(e.pointerId);
     rec.x = e.clientX;
     rec.y = e.clientY;
+    if (rec.pointerType === "pen") this._lastPenActivity = performance.now();  // 掌触 tap 门：从抬笔起算
 
     if (rec.role === "gesture") {
       const remaining = this._gestureTouches().length;
@@ -321,8 +335,12 @@ export class InputController {
         if (remaining === 0 && this._gestureTap) {
           const tap = this._gestureTap;
           this._gestureTap = null;
-          const elapsed = performance.now() - tap.startTime;
-          if (tap.isTap && elapsed < GESTURE_TAP_MAX_MS) {
+          const now = performance.now();
+          const elapsed = now - tap.startTime;
+          // 笔尖时近性门：写字前后手掌抖出的假双指全落在这窗口内 → 吞掉，绝不误撤销。
+          // 真想撤销/重做时笔尖已离屏 > PALM_PEN_GUARD_MS，双指/三指 tap 照常生效。
+          const palmGuard = (now - this._lastPenActivity) < PALM_PEN_GUARD_MS;
+          if (tap.isTap && elapsed < GESTURE_TAP_MAX_MS && !palmGuard) {
             if (tap.maxCount === 2) {
               this.undo();
               this.status("双指 · 撤销");
@@ -518,6 +536,19 @@ export class InputController {
       this._endGesture();
       this._gestureTap = null;
     }
+  }
+
+  // 笔尖落下时把所有 touch 当掌触清掉（含没收到 up 的 ghost）。清得比 stale purge 狠：
+  // 不看时间，pen down 即清。清完收掉任何 gesture / tap 残留，免得掌触抬起时假双指误撤销。
+  _purgeAllTouches() {
+    for (const [pid, p] of this.pointers) {
+      if (p.pointerType !== "touch") continue;
+      if (p.role === "draw") this.board.cancelStroke(pid);
+      else if (p.role === "erase") this._commitErase();
+      this.pointers.delete(pid);
+    }
+    if (this.gestureStart && this._gestureTouches().length < 2) this._endGesture();
+    this._gestureTap = null;
   }
 
   // 失焦 / 切后台 / 系统打断时，丢弃所有在途指针，回到干净基线。
