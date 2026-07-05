@@ -336,9 +336,9 @@ export class InputController {
           const tap = this._gestureTap;
           this._gestureTap = null;
           const now = performance.now();
-          const elapsed = now - tap.startTime;
-          // 笔尖时近性门：写字前后手掌抖出的假双指全落在这窗口内 → 吞掉，绝不误撤销。
-          // 真想撤销/重做时笔尖已离屏 > PALM_PEN_GUARD_MS，双指/三指 tap 照常生效。
+          // 从最早触点落下算 tap 时长（不是从第二指到来算）：掌根久搁 = 慢 tap = 超限剔除。
+          const elapsed = now - tap.firstDownTime;
+          // 笔尖时近性门：写字节奏里手掌抖出的"快闪双指"（时长没超但落在写字缝里）也吞掉。
           const palmGuard = (now - this._lastPenActivity) < PALM_PEN_GUARD_MS;
           if (tap.isTap && elapsed < GESTURE_TAP_MAX_MS && !palmGuard) {
             if (tap.maxCount === 2) {
@@ -464,6 +464,7 @@ export class InputController {
     if (!this._gestureTap) {
       this._gestureTap = {
         startTime: performance.now(),
+        firstDownTime: Infinity,   // 参与本次手势的最早触点落下时刻，tap 时长从这里算
         isTap: true,
         maxCount: 0,
         startPositions: {},
@@ -472,6 +473,11 @@ export class InputController {
     for (const [pid, p] of this.pointers) {
       if (p.role === "gesture" && !(pid in this._gestureTap.startPositions)) {
         this._gestureTap.startPositions[pid] = { x: p.x, y: p.y };
+        // 掌根久搁再抬：它的 downTime 很早 → firstDownTime 很早 → 抬手时 elapsed 超限，不算 tap。
+        // （从第二指到来算的旧口径抓不到这种"慢 tap"：掌 blob 早就压着，第二个 blob 才刚冒。）
+        if (p.downTime != null && p.downTime < this._gestureTap.firstDownTime) {
+          this._gestureTap.firstDownTime = p.downTime;
+        }
       }
     }
     if (touches.length > this._gestureTap.maxCount) {
