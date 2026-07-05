@@ -1,5 +1,7 @@
 import { drawStroke } from "./board.js";
 import { renderHtml as renderTextHtml, ensureKatex } from "./textbox.js";
+import type { Board } from "./board.js";
+import type { TextStroke } from "./types.js";
 
 // 导出 PNG / PDF / 复制到剪贴板 / Web Share。
 //
@@ -17,18 +19,18 @@ const PDF_MAX_DIM = 4096;
 
 // ---- 下载入口 ----
 
-export async function exportPngCurrentView(board, fileName = "scratchpad.png") {
+export async function exportPngCurrentView(board: Board, fileName = "scratchpad.png"): Promise<void> {
   const blob = await renderCurrentViewBlob(board);
   triggerDownload(blob, fileName);
 }
 
-export async function exportPngAll(board, fileName = "scratchpad.png") {
+export async function exportPngAll(board: Board, fileName = "scratchpad.png"): Promise<void> {
   const blob = await renderAllBlob(board);
   if (!blob) { alert("没东西可导出"); return; }
   triggerDownload(blob, fileName);
 }
 
-export async function exportPdfAll(board, fileName = "scratchpad.pdf") {
+export async function exportPdfAll(board: Board, fileName = "scratchpad.pdf"): Promise<void> {
   const bb = board.computeBoundingBox();
   if (!bb) { alert("没东西可导出"); return; }
   const pad = PNG_ALL_PADDING;
@@ -45,7 +47,7 @@ export async function exportPdfAll(board, fileName = "scratchpad.pdf") {
 
   const off = document.createElement("canvas");
   off.width = w; off.height = h;
-  const ctx = off.getContext("2d", { alpha: false });
+  const ctx = off.getContext("2d", { alpha: false })!;
   await renderOffscreen(board, ctx, {
     width: w, height: h,
     tx: (-bb.x0 + pad) * pxPerUnit,
@@ -67,14 +69,14 @@ export async function exportPdfAll(board, fileName = "scratchpad.pdf") {
 
 // ---- 复制 PNG 到剪贴板 ----
 
-export async function copyPngCurrentView(board) {
+export async function copyPngCurrentView(board: Board): Promise<void> {
   const blob = await renderCurrentViewBlob(board);
   await navigator.clipboard.write([
     new ClipboardItem({ "image/png": blob }),
   ]);
 }
 
-export async function copyPngAll(board) {
+export async function copyPngAll(board: Board): Promise<void> {
   const blob = await renderAllBlob(board);
   if (!blob) throw new Error("空");
   await navigator.clipboard.write([
@@ -84,7 +86,7 @@ export async function copyPngAll(board) {
 
 // ---- Web Share ----
 
-export function isShareSupported() {
+export function isShareSupported(): boolean {
   try {
     const dummy = new File([new Blob()], "x.png", { type: "image/png" });
     return typeof navigator.share === "function" &&
@@ -93,14 +95,14 @@ export function isShareSupported() {
   } catch { return false; }
 }
 
-export async function sharePngAll(board, fileName = "scratchpad.png") {
+export async function sharePngAll(board: Board, fileName = "scratchpad.png"): Promise<void> {
   const blob = await renderAllBlob(board);
   if (!blob) throw new Error("空");
   const file = new File([blob], fileName, { type: "image/png" });
   await navigator.share({ files: [file], title: "ScratchPad" });
 }
 
-export async function sharePngCurrentView(board, fileName = "scratchpad.png") {
+export async function sharePngCurrentView(board: Board, fileName = "scratchpad.png"): Promise<void> {
   const blob = await renderCurrentViewBlob(board);
   const file = new File([blob], fileName, { type: "image/png" });
   await navigator.share({ files: [file], title: "ScratchPad" });
@@ -108,13 +110,13 @@ export async function sharePngCurrentView(board, fileName = "scratchpad.png") {
 
 // ---- 内部：blob 渲染 ----
 
-async function renderCurrentViewBlob(board) {
+async function renderCurrentViewBlob(board: Board): Promise<Blob> {
   const w = board.canvas.clientWidth;
   const h = board.canvas.clientHeight;
   const off = document.createElement("canvas");
   off.width = Math.round(w * PNG_DPI);
   off.height = Math.round(h * PNG_DPI);
-  const ctx = off.getContext("2d", { alpha: false });
+  const ctx = off.getContext("2d", { alpha: false })!;
   await renderOffscreen(board, ctx, {
     width: off.width,
     height: off.height,
@@ -125,7 +127,7 @@ async function renderCurrentViewBlob(board) {
   return toBlob(off, "image/png");
 }
 
-async function renderAllBlob(board) {
+async function renderAllBlob(board: Board): Promise<Blob | null> {
   const bb = board.computeBoundingBox();
   if (!bb) return null;
   const pad = PNG_ALL_PADDING;
@@ -138,7 +140,7 @@ async function renderAllBlob(board) {
   const h = Math.round(worldH * pxPerUnit);
   const off = document.createElement("canvas");
   off.width = w; off.height = h;
-  const ctx = off.getContext("2d", { alpha: false });
+  const ctx = off.getContext("2d", { alpha: false })!;
   await renderOffscreen(board, ctx, {
     width: w, height: h,
     tx: (-bb.x0 + pad) * pxPerUnit,
@@ -148,7 +150,11 @@ async function renderAllBlob(board) {
   return toBlob(off, "image/png");
 }
 
-async function renderOffscreen(board, ctx, opts) {
+async function renderOffscreen(
+  board: Board,
+  ctx: CanvasRenderingContext2D,
+  opts: { width: number; height: number; tx: number; ty: number; scale: number },
+): Promise<void> {
   const { width, height, tx, ty, scale } = opts;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = board._bgColor;
@@ -159,7 +165,7 @@ async function renderOffscreen(board, ctx, opts) {
     drawStroke(ctx, s, viewport, board._inkColor);
   }
   // 文字块走 html2canvas → 离屏临时 div → 像素 → drawImage 到导出 canvas
-  const textStrokes = board.strokes.filter((s) => s.type === "text");
+  const textStrokes = board.strokes.filter((s): s is TextStroke => s.type === "text");
   if (textStrokes.length) {
     const inkColor = board._inkColor;
     await ensureKatex().catch(() => {});
@@ -175,7 +181,14 @@ async function renderOffscreen(board, ctx, opts) {
 // 用 html2canvas 走 DOM tree → 像素，不靠 SVG foreignObject 那套跨浏览器不稳的 hack。
 // 流程：建一个跟 live .text-stroke 同样 CSS 的离屏 div → html2canvas → drawImage。
 // WYSIWYG：div 用 1:1 自然字号渲染，scale 选项告诉 html2canvas 输出多少 DPI 像素。
-async function rasterizeTextStroke(s, ctx, exportTx, exportTy, exportScale, inkColor) {
+async function rasterizeTextStroke(
+  s: TextStroke,
+  ctx: CanvasRenderingContext2D,
+  exportTx: number,
+  exportTy: number,
+  exportScale: number,
+  inkColor: string,
+): Promise<void> {
   const html = (() => {
     try { return renderTextHtml(s.source); }
     catch { return s.source.replace(/[<>&]/g, ""); }
@@ -202,7 +215,7 @@ async function rasterizeTextStroke(s, ctx, exportTx, exportTy, exportScale, inkC
   document.body.appendChild(wrap);
 
   try {
-    const bitmap = await window.html2canvas(target, {
+    const bitmap = await window.html2canvas!(target, {
       backgroundColor: null,           // 透明
       scale: exportScale,              // 直接出导出分辨率
       logging: false,
@@ -219,8 +232,8 @@ async function rasterizeTextStroke(s, ctx, exportTx, exportTy, exportScale, inkC
 }
 
 // ---- html2canvas 懒加载 ----
-let _html2canvasPromise = null;
-function ensureHtml2Canvas() {
+let _html2canvasPromise: Promise<unknown> | null = null;
+function ensureHtml2Canvas(): Promise<unknown> {
   if (_html2canvasPromise) return _html2canvasPromise;
   _html2canvasPromise = new Promise((resolve, reject) => {
     if (window.html2canvas) { resolve(window.html2canvas); return; }
@@ -233,11 +246,11 @@ function ensureHtml2Canvas() {
   return _html2canvasPromise;
 }
 
-function toBlob(canvas, type) {
-  return new Promise((resolve) => canvas.toBlob(resolve, type));
+function toBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob> {
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob!), type));
 }
 
-function triggerDownload(blob, fileName) {
+function triggerDownload(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -249,15 +262,17 @@ function triggerDownload(blob, fileName) {
 }
 
 // 动态加载本地 vendor 的 jsPDF (UMD)
-let _jspdfPromise = null;
-function loadJsPdf() {
+let _jspdfPromise: Promise<JsPdfNamespace> | null = null;
+function loadJsPdf(): Promise<JsPdfNamespace> {
   if (_jspdfPromise) return _jspdfPromise;
   _jspdfPromise = new Promise((resolve, reject) => {
-    if (window.jspdf?.jsPDF) { resolve(window.jspdf); return; }
+    const ns = window.jspdf;
+    if (ns?.jsPDF) { resolve(ns); return; }
     const s = document.createElement("script");
     s.src = "./src/vendor/jspdf.umd.min.js";
     s.onload = () => {
-      if (window.jspdf?.jsPDF) resolve(window.jspdf);
+      const loaded = window.jspdf;
+      if (loaded?.jsPDF) resolve(loaded);
       else reject(new Error("jsPDF 加载失败"));
     };
     s.onerror = () => reject(new Error("jsPDF 网络失败"));

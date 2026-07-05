@@ -6,8 +6,9 @@
 #   (push 后 GH Actions 把 main 分支的 dist + 源原样部署到 /dev/ 路径；prod 分支 → /)
 #
 # 抄自 sibling canonical（WebPaint/RealHome 的 scripts/build.sh）。ScratchPad 特化：
-#   - ENTRY=./src/app.js（还没迁 TS；将来某个 .js → .ts 时 esbuild 自动 strip 类型，
-#     把下面 tsc --noEmit 门配好（tsconfig + node_modules/.bin/tsc）就有真类型护栏）。
+#   - ENTRY=./src/app.ts（已全量迁 TS；esbuild 直接吃 .ts、自动 strip 类型。真类型护栏
+#     由下面 tsc --noEmit 门把关——装了 typescript（npm i）就强制过）。version.js /
+#     service-worker.js 仍是 .js（浏览器直接加载，不进 bundle）。
 #   - 无 externals：vendor 库（jspdf / html2canvas / katex）都是运行时注入 <script>（读
 #     window.* 全局），不是 ESM import，esbuild 根本不碰它们 → 不用 --external。src/vendor/
 #     由 deploy.yml 原样部署，运行时按 ./src/vendor/... 路径注入照常。
@@ -15,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ENTRY="./src/app.js"
+ENTRY="./src/app.ts"
 OUT_DIR="./dist"
 ESBUILD_VER="0.24.0"
 ESBUILD="./tools/esbuild/esbuild"
@@ -42,8 +43,9 @@ fi
 mkdir -p "$OUT_DIR"
 TMP_OUT="$OUT_DIR/scratchpad-tmp.mjs"
 
-# 0. 类型检查门（TS-ready）：装了 tsc 就强制过；裸 clone（无 node_modules）静默跳过。
-#    今天还没 TS，这块是占位——迁 TS 后加 tsconfig.json + npm i typescript 即生效。
+# 0. 类型检查门：装了 tsc 就强制过；裸 clone（无 node_modules）静默跳过。
+#    源已全量 TS（tsconfig.json + npm i typescript 生效）。node_modules gitignored，
+#    与 tools/esbuild 同理——构建工具不入 git，本地 npm i 一次即有护栏。
 TSC="./node_modules/.bin/tsc"
 if [ -x "$TSC" ]; then
   echo "[build] 类型检查 tsc --noEmit…"

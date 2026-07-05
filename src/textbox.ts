@@ -9,12 +9,14 @@
 // 老的手写笔画没有 type 字段 (兼容)。
 
 import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
+import type { Stroke, TextStroke, TextPlaceRect } from "./types.js";
+import type { Board } from "./board.js";
 
 // ---- KaTeX 懒加载 ----
-let _katexPromise = null;
-export function ensureKatex() {
+let _katexPromise: Promise<KatexStatic> | null = null;
+export function ensureKatex(): Promise<KatexStatic> {
   if (_katexPromise) return _katexPromise;
-  _katexPromise = new Promise((resolve, reject) => {
+  _katexPromise = new Promise<KatexStatic>((resolve, reject) => {
     if (!document.getElementById("__katex_css")) {
       const link = document.createElement("link");
       link.id = "__katex_css";
@@ -34,8 +36,9 @@ export function ensureKatex() {
 
 // ---- source 解析 (text + $..$ + $$..$$) ----
 // 简单状态机：先看 $$，再看 $。未闭合的 $ 当字面量。
-export function parseSource(source) {
-  const out = [];
+type ParsedPart = { mode: "text" | "math-display" | "math-inline"; text: string };
+export function parseSource(source: string): ParsedPart[] {
+  const out: ParsedPart[] = [];
   let i = 0, buf = "";
   while (i < source.length) {
     if (source[i] === "$" && source[i + 1] === "$") {
@@ -59,19 +62,20 @@ export function parseSource(source) {
   return out;
 }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (ch) => ({
+function escapeHtml(s: string): string {
+  const map: Record<string, string> = {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
-  })[ch]);
+  };
+  return s.replace(/[&<>"']/g, (ch) => map[ch]);
 }
 
-export function renderHtml(source) {
+export function renderHtml(source: string): string {
   const parts = parseSource(source);
   return parts.map((p) => {
     if (p.mode === "text") return escapeHtml(p.text);
     const display = p.mode === "math-display";
     try {
-      return window.katex.renderToString(p.text, { displayMode: display, throwOnError: false });
+      return window.katex!.renderToString(p.text, { displayMode: display, throwOnError: false });
     } catch {
       return `<span class="text-stroke-err">${escapeHtml(p.text)}</span>`;
     }
@@ -79,12 +83,33 @@ export function renderHtml(source) {
 }
 
 // ---- Manager ----
+interface TextManagerOptions {
+  overlayInner?: HTMLElement;
+  editor?: HTMLTextAreaElement;
+  editorWrap?: HTMLElement;
+  getColor?: () => string;
+  getInkColor?: () => string;
+  onAdd?: (s: Stroke) => void;
+  onDelete?: (s: Stroke) => void;
+}
+
 export class TextManager {
-  constructor(board, opts = {}) {
+  board: Board;
+  overlayInner: HTMLElement;
+  editor: HTMLTextAreaElement;
+  editorWrap: HTMLElement;
+  getColor: () => string;
+  getInkColor: () => string;
+  onAdd: (s: Stroke) => void;
+  onDelete: (s: Stroke) => void;
+  editing: { stroke: TextStroke | null; sx: number; sy: number; isNew: boolean } | null;
+  elById: Map<number, HTMLElement>;
+
+  constructor(board: Board, opts: TextManagerOptions = {} as TextManagerOptions) {
     this.board = board;
-    this.overlayInner = opts.overlayInner;
-    this.editor = opts.editor;
-    this.editorWrap = opts.editorWrap;
+    this.overlayInner = opts.overlayInner!;
+    this.editor = opts.editor!;
+    this.editorWrap = opts.editorWrap!;
     this.getColor = opts.getColor || (() => "ink");
     this.getInkColor = opts.getInkColor || (() => "#1b1b1b");
     this.onAdd = opts.onAdd || (() => {});       // 推 undo
@@ -102,7 +127,7 @@ export class TextManager {
   }
 
   // 把所有 type="text" 笔画渲染到浮层 (boot / theme change / clear 后调)
-  renderAll() {
+  renderAll(): void {
     this.overlayInner.innerHTML = "";
     this.elById.clear();
     for (const s of this.board.strokes) {
@@ -113,10 +138,10 @@ export class TextManager {
   // 对账浮层 DOM 和 board.strokes：擦除 / undo / redo / clearAll 都通过这条路
   // 收尾 (input.js 不需要知道 text 块的存在)。每帧 render hook 后调，O(n) 但
   // n 通常很小。
-  syncOverlay() {
+  syncOverlay(): void {
     // 删：DOM 里有，但 strokes 里找不到的
     if (this.elById.size > 0) {
-      const live = new Set();
+      const live = new Set<number>();
       for (const s of this.board.strokes) {
         if (s.type === "text" && s.id != null) live.add(s.id);
       }
@@ -132,7 +157,7 @@ export class TextManager {
     }
   }
 
-  _renderStroke(s) {
+  _renderStroke(s: TextStroke): void {
     const el = document.createElement("div");
     el.className = "text-stroke";
     el.style.transform = `translate(${s.x}px, ${s.y}px)`;
@@ -143,7 +168,7 @@ export class TextManager {
     } else {
       el.style.whiteSpace = "pre";       // 单笔 override CSS 默认的 pre-wrap
     }
-    el.dataset.strokeId = s.id ?? "";
+    el.dataset.strokeId = String(s.id ?? "");
     try {
       el.innerHTML = renderHtml(s.source);
     } catch (e) {
@@ -151,20 +176,20 @@ export class TextManager {
     }
     this._bindStrokeHandlers(el, s);
     this.overlayInner.appendChild(el);
-    this.elById.set(s.id, el);
+    this.elById.set(s.id!, el);
     // bbox: offsetWidth/Height 不受 transform 影响，等于 1:1 scale 下的 CSS px
     s.bbox = [s.x, s.y, s.x + el.offsetWidth, s.y + el.offsetHeight];
   }
 
   // 拖 = 移动；点击 (无移动) = 编辑
-  _bindStrokeHandlers(el, s) {
+  _bindStrokeHandlers(el: HTMLElement, s: TextStroke): void {
     const DRAG_THRESHOLD_SQ = 16;   // 4 px²；超过就当拖动
-    let pid = null;
+    let pid: number | null = null;
     let startX = 0, startY = 0;     // 屏幕坐标
     let originX = s.x, originY = s.y;
     let moved = false;
 
-    el.addEventListener("pointerdown", (e) => {
+    el.addEventListener("pointerdown", (e: PointerEvent) => {
       e.stopPropagation();
       pid = e.pointerId;
       startX = e.clientX; startY = e.clientY;
@@ -173,7 +198,7 @@ export class TextManager {
       el.setPointerCapture?.(pid);
     });
 
-    el.addEventListener("pointermove", (e) => {
+    el.addEventListener("pointermove", (e: PointerEvent) => {
       if (e.pointerId !== pid) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
@@ -191,7 +216,7 @@ export class TextManager {
       s.bbox = [s.x, s.y, s.x + w, s.y + h];
     });
 
-    el.addEventListener("pointerup", (e) => {
+    el.addEventListener("pointerup", (e: PointerEvent) => {
       if (e.pointerId !== pid) return;
       el.releasePointerCapture?.(pid);
       pid = null;
@@ -218,21 +243,21 @@ export class TextManager {
 
   // 套索移动 / move undo 改了 text stroke 的 x/y → 把 DOM transform 重新对齐。
   // (syncOverlay 只增删元素，不动已有元素位置；位置只在 _renderStroke 时写一次。)
-  refreshPositions() {
+  refreshPositions(): void {
     for (const [id, el] of this.elById) {
       const s = this.board.strokes.find((x) => x.id === id);
       if (s && s.type === "text") el.style.transform = `translate(${s.x}px, ${s.y}px)`;
     }
   }
 
-  removeStrokeFromOverlay(strokeId) {
+  removeStrokeFromOverlay(strokeId: number): void {
     const el = this.elById.get(strokeId);
     if (el) el.remove();
     this.elById.delete(strokeId);
   }
 
   // 主题切换 / ink 变色：把所有 color === "ink" 的 text-stroke 重染色
-  refreshThemeColors() {
+  refreshThemeColors(): void {
     const ink = this.getInkColor();
     for (const [id, el] of this.elById) {
       const s = this.board.strokes.find((x) => x.id === id);
@@ -240,7 +265,7 @@ export class TextManager {
     }
   }
 
-  updateOverlayTransform() {
+  updateOverlayTransform(): void {
     const { tx, ty, scale } = this.board.viewport;
     this.overlayInner.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
   }
@@ -248,19 +273,19 @@ export class TextManager {
   // ---- 编辑流程 ----
 
   // arg: 已有 stroke 对象 → 编辑；{ sx, sy } 屏幕坐标 → 新建
-  async openEditor(arg) {
+  async openEditor(arg: TextStroke | TextPlaceRect): Promise<void> {
     if (this.editing) await this._commit();   // 之前的先收完整
     await ensureKatex();                       // 渲染要 KaTeX
 
     const scale = this.board.viewport.scale;
-    let stroke = null, sx, sy, sw = 0, sh = 0;
-    if (arg && arg.type === "text") {
+    let stroke: TextStroke | null = null, sx: number, sy: number, sw = 0, sh = 0;
+    if (!("sx" in arg)) {   // arg 无 sx → 已有 TextStroke（编辑）；有 sx → TextPlaceRect（新建）
       stroke = arg;
       const sp = this.board.worldToScreen(stroke.x, stroke.y);
       sx = sp.x; sy = sp.y;
       // 把世界宽度转回屏幕宽度，editor 才能"长得"跟最终渲染一样宽
       if (stroke.width && stroke.width > 0) sw = stroke.width * scale;
-      const el = this.elById.get(stroke.id);
+      const el = this.elById.get(stroke.id!);
       if (el) el.style.visibility = "hidden";
     } else {
       sx = arg.sx; sy = arg.sy;
@@ -283,25 +308,25 @@ export class TextManager {
 
   // 外部信号：如果 editor 开着且空，关掉它。给"T 模式失败拖动 → 清掉刚弹的空框"用。
   // 有内容的话留着，用户没说要丢。
-  dismissIfEmpty() {
+  dismissIfEmpty(): void {
     if (!this.editing) return;
     if (this.editor.value.trim() === "") {
       this._closeEditor();
     }
   }
 
-  _closeEditor() {
+  _closeEditor(): void {
     if (!this.editing) return;
     const session = this.editing;
     this.editing = null;                   // claim 立即清，避免 blur/再点 重入
     if (session.stroke) {
-      const el = this.elById.get(session.stroke.id);
+      const el = this.elById.get(session.stroke.id!);
       if (el) el.style.visibility = "";
     }
     this.editorWrap.classList.add("hidden");
   }
 
-  _onEditorKey(e) {
+  _onEditorKey(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.preventDefault();
       this._closeEditor();
@@ -315,7 +340,7 @@ export class TextManager {
     // Shift+Enter / Ctrl+Enter / Alt+Enter → 换行 (textarea 默认行为)
   }
 
-  async _commit() {
+  async _commit(): Promise<void> {
     if (!this.editing) return;
     const session = this.editing;
     this.editing = null;                          // claim 立即清 (blur 再触发时早返回)
@@ -332,14 +357,14 @@ export class TextManager {
     // 隐藏编辑器 + 还原 edit target 的 visibility (≈ _closeEditor 的副作用)
     this.editorWrap.classList.add("hidden");
     if (session.stroke) {
-      const el = this.elById.get(session.stroke.id);
+      const el = this.elById.get(session.stroke.id!);
       if (el) el.style.visibility = "";
     }
 
     if (session.isNew) {
       if (!trimmed) return;
       const { x: wx, y: wy } = this.board.screenToWorld(session.sx, session.sy);
-      const stroke = {
+      const stroke: TextStroke = {
         type: "text",
         x: wx, y: wy,
         source: newSource,
@@ -358,12 +383,12 @@ export class TextManager {
       return;
     }
 
-    const existing = session.stroke;
+    const existing = session.stroke!;
     if (!trimmed) {
       try {
-        await deleteStrokes([existing.id]);
+        await deleteStrokes([existing.id!]);
         this.board.strokes = this.board.strokes.filter((x) => x !== existing);
-        this.removeStrokeFromOverlay(existing.id);
+        this.removeStrokeFromOverlay(existing.id!);
         this.onDelete(existing);
       } catch (err) {
         console.error("text delete failed", err);
@@ -377,7 +402,7 @@ export class TextManager {
     existing.width = newWidth;
     try {
       await putStrokeWithId(existing);
-      this.removeStrokeFromOverlay(existing.id);
+      this.removeStrokeFromOverlay(existing.id!);
       this._renderStroke(existing);
     } catch (err) {
       console.error("text update failed", err);

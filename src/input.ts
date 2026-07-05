@@ -19,6 +19,52 @@
 // 撤销: 每画完一笔 / 每擦一批 → 推入 undo stack。redo stack 在新动作时清空。
 
 import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
+import type { ToolName, Viewport, Stroke, UndoEntry, TextPlaceRect } from "./types.js";
+import type { Board } from "./board.js";
+
+type PointerRole =
+  | "draw" | "erase" | "pan" | "hold" | "gesture"
+  | "ignore" | "lasso" | "sel-move" | "text-create";
+
+// A single tracked pointer. Many fields are role-specific → optional. Keep it broad.
+interface PointerRec {
+  pointerType: string;
+  role: PointerRole | null;
+  x: number;
+  y: number;
+  startX?: number;
+  startY?: number;
+  smX?: number;
+  smY?: number;
+  downTime?: number;
+  lastSeen?: number;
+  lastP?: number | null;
+  smP?: number;
+  lastEventTs?: number;
+  lastAcceptedX?: number;
+  lastAcceptedY?: number;
+  minSampleDistSq?: number;
+  lastX?: number;
+  lastY?: number;
+  totalDx?: number;
+  totalDy?: number;
+  moved?: boolean;
+  _panEngaged?: boolean;
+  _lastX?: number;
+  _lastY?: number;
+}
+
+interface InputOptions {
+  onChange?: () => void;
+  getTool?: () => ToolName;
+  getColor?: () => string;
+  getWidth?: () => number;
+  getPressureEnabled?: () => boolean;
+  getSingleFingerDraw?: () => boolean;
+  onTextPlace?: (rect: TextPlaceRect) => void;
+  onTextDismiss?: () => void;
+  status?: (text: string, persist?: boolean) => void;
+}
 
 const ERASER_RADIUS_SCREEN = 14; // 屏幕 px
 
@@ -63,7 +109,31 @@ const MIN_SAMPLE_DIST_FACTOR = 0.25;
 const PRESSURE_SMOOTH_ALPHA = 0.4;
 
 export class InputController {
-  constructor(board, { onChange, getTool, getColor, getWidth, getPressureEnabled, getSingleFingerDraw, onTextPlace, onTextDismiss, status } = {}) {
+  board: Board;
+  canvas: HTMLCanvasElement;
+  onChange: () => void;
+  getTool: () => ToolName;
+  getColor: () => string;
+  getWidth: () => number;
+  getPressureEnabled: () => boolean;
+  getSingleFingerDraw: () => boolean;
+  onTextPlace: (rect: TextPlaceRect) => void;
+  onTextDismiss: () => void;
+  status: (text: string, persist?: boolean) => void;
+  pointers: Map<number, PointerRec>;
+  penEverSeen: boolean;
+  spaceDown: boolean;
+  gestureStart: { dist: number; midX: number; midY: number; vp: Viewport } | null;
+  _gestureTap: { startTime: number; firstDownTime: number; isTap: boolean; maxCount: number; startPositions: Record<number, { x: number; y: number }> } | null;
+  eraseSession: { ids: Set<number>; strokes: Stroke[] } | null;
+  undoStack: UndoEntry[];
+  redoStack: UndoEntry[];
+  _lastTap: { time: number; x: number; y: number; stroke: Stroke | null } | null;
+  _lastPenActivity: number;
+  _lassoPts: number[] | null = null;
+  _textDraft: HTMLElement | null = null;
+
+  constructor(board: Board, { onChange, getTool, getColor, getWidth, getPressureEnabled, getSingleFingerDraw, onTextPlace, onTextDismiss, status }: InputOptions = {}) {
     this.board = board;
     this.canvas = board.canvas;
     this.onChange = onChange || (() => {});
@@ -91,7 +161,7 @@ export class InputController {
     this._bind();
   }
 
-  _bind() {
+  _bind(): void {
     const c = this.canvas;
     c.addEventListener("pointerdown", (e) => this._down(e));
     c.addEventListener("pointermove", (e) => this._move(e));
@@ -114,7 +184,7 @@ export class InputController {
     window.addEventListener("keyup", (e) => this._keyup(e));
   }
 
-  _down(e) {
+  _down(e: PointerEvent): void {
     this._purgeStalePointers();
     if (e.pointerType === "pen") {
       this.penEverSeen = true;
@@ -212,7 +282,7 @@ export class InputController {
     }
 
     // 决定角色
-    let role = null;
+    let role: PointerRole | null = null;
     if (tool === "hand" || this.spaceDown) {
       role = "pan";
     } else if (e.pointerType === "mouse") {
@@ -236,7 +306,7 @@ export class InputController {
     }
 
     const baseW = this.getWidth();
-    const rec = {
+    const rec: PointerRec = {
       pointerType: e.pointerType, role,
       x, y, startX: x, startY: y,
       smX: x, smY: y,                  // 平滑后的屏幕坐标 (draw 用)
@@ -265,7 +335,7 @@ export class InputController {
     e.preventDefault();
   }
 
-  _move(e) {
+  _move(e: PointerEvent): void {
     const rec = this.pointers.get(e.pointerId);
     if (!rec) return;
     rec.x = e.clientX;
@@ -294,7 +364,7 @@ export class InputController {
     }
 
     if (rec.role === "text-create") {
-      this._updateTextDraft(rec.startX, rec.startY, rec.x, rec.y, false);
+      this._updateTextDraft(rec.startX!, rec.startY!, rec.x, rec.y, false);
       e.preventDefault();
       return;
     }
@@ -316,13 +386,13 @@ export class InputController {
     }
 
     if (rec.role === "sel-move") {
-      const dxS = e.clientX - rec.lastX, dyS = e.clientY - rec.lastY;
+      const dxS = e.clientX - rec.lastX!, dyS = e.clientY - rec.lastY!;
       rec.lastX = e.clientX; rec.lastY = e.clientY;
       const scale = this.board.viewport.scale;
       const dx = dxS / scale, dy = dyS / scale;
       this.board.translateStrokes(this.board.selection, dx, dy);
-      rec.totalDx += dx; rec.totalDy += dy;
-      if (Math.hypot(e.clientX - rec.startX, e.clientY - rec.startY) > 3) rec.moved = true;
+      rec.totalDx! += dx; rec.totalDy! += dy;
+      if (Math.hypot(e.clientX - rec.startX!, e.clientY - rec.startY!) > 3) rec.moved = true;
       e.preventDefault();
       return;
     }
@@ -330,21 +400,21 @@ export class InputController {
     if (rec.role === "draw") {
       // 用 coalesced events 拿到所有亚帧采样 + 轻量指数平滑 + 距离门限
       const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : null;
-      const list = (events && events.length) ? events : [e];
+      const list: PointerEvent[] = (events && events.length) ? events : [e];
       const enabled = this.getPressureEnabled();
       for (const ev of list) {
         // **Safari iOS getCoalescedEvents() 跨批次回放过滤** — 详见 docs。
-        if (ev.timeStamp <= rec.lastEventTs) continue;
+        if (ev.timeStamp <= rec.lastEventTs!) continue;
         rec.lastEventTs = ev.timeStamp;
-        rec.smX += STROKE_SMOOTH_ALPHA * (ev.clientX - rec.smX);
-        rec.smY += STROKE_SMOOTH_ALPHA * (ev.clientY - rec.smY);
+        rec.smX! += STROKE_SMOOTH_ALPHA * (ev.clientX - rec.smX!);
+        rec.smY! += STROKE_SMOOTH_ALPHA * (ev.clientY - rec.smY!);
         // 距离门限：相邻样本太近就跳过 (省内存 + 减计算)。粗笔阈值大，细笔阈值小。
-        const ddx = rec.smX - rec.lastAcceptedX;
-        const ddy = rec.smY - rec.lastAcceptedY;
-        if (ddx * ddx + ddy * ddy < rec.minSampleDistSq) continue;
-        rec.lastAcceptedX = rec.smX;
-        rec.lastAcceptedY = rec.smY;
-        const { x: wx, y: wy } = this.board.screenToWorld(rec.smX, rec.smY);
+        const ddx = rec.smX! - rec.lastAcceptedX!;
+        const ddy = rec.smY! - rec.lastAcceptedY!;
+        if (ddx * ddx + ddy * ddy < rec.minSampleDistSq!) continue;
+        rec.lastAcceptedX = rec.smX!;
+        rec.lastAcceptedY = rec.smY!;
+        const { x: wx, y: wy } = this.board.screenToWorld(rec.smX!, rec.smY!);
         const pressure = effectivePressureFor(rec, ev, enabled);
         this.board.extendStroke(e.pointerId, wx, wy, pressure);
       }
@@ -354,8 +424,8 @@ export class InputController {
       // 触屏 pan 死区：第二指到来前，先落的手指动得够小就先不平移 (防双指 tap 抖动)。
       // 注意死区只挡触屏；鼠标/笔即时平移。死区内仍更新 _lastX/Y 基准，避免 engage 时跳跃。
       if (rec.pointerType === "touch" && !rec._panEngaged) {
-        const ddx = e.clientX - rec.startX;
-        const ddy = e.clientY - rec.startY;
+        const ddx = e.clientX - rec.startX!;
+        const ddy = e.clientY - rec.startY!;
         if (ddx * ddx + ddy * ddy < PAN_TOUCH_DEADZONE_SQ) {
           rec._lastX = e.clientX;
           rec._lastY = e.clientY;
@@ -376,7 +446,7 @@ export class InputController {
     e.preventDefault();
   }
 
-  _up(e, cancelled = false) {
+  _up(e: PointerEvent, cancelled = false): void {
     const rec = this.pointers.get(e.pointerId);
     if (!rec) return;
     this.pointers.delete(e.pointerId);
@@ -417,10 +487,10 @@ export class InputController {
       // 收尾：drag 够大 → 把屏幕矩形交给 onTextPlace；
       //       小到几乎是点击 → 默默放弃，同时如果挂着一个空 editor 也一起关掉
       if (this._textDraft) this._textDraft.classList.add("hidden");
-      const x0 = Math.min(rec.startX, rec.x);
-      const y0 = Math.min(rec.startY, rec.y);
-      const x1 = Math.max(rec.startX, rec.x);
-      const y1 = Math.max(rec.startY, rec.y);
+      const x0 = Math.min(rec.startX!, rec.x);
+      const y0 = Math.min(rec.startY!, rec.y);
+      const x1 = Math.max(rec.startX!, rec.x);
+      const y1 = Math.max(rec.startY!, rec.y);
       const sw = x1 - x0, sh = y1 - y0;
       const MIN_DRAG = 24;
       if (sw >= MIN_DRAG || sh >= MIN_DRAG) {
@@ -446,16 +516,16 @@ export class InputController {
     let isTap = false;
     const tapEligible = !cancelled && rec.downTime &&
       e.pointerType === "touch" && this.penEverSeen &&
-      rec.role !== "gesture" && rec.role !== "ignore";
+      (rec.role as PointerRole | null) !== "gesture" && rec.role !== "ignore";
     if (tapEligible) {
       const now = performance.now();
-      const dur = now - rec.downTime;
-      const dist = Math.hypot(rec.x - rec.startX, rec.y - rec.startY);
+      const dur = now - rec.downTime!;
+      const dist = Math.hypot(rec.x - rec.startX!, rec.y - rec.startY!);
       isTap = dur < TAP_MAX_DURATION && dist < TAP_MAX_MOVE;
       if (isTap) {
         const lt = this._lastTap;
         const isDouble = lt && (now - lt.time) < DOUBLETAP_WINDOW &&
-          Math.hypot(rec.startX - lt.x, rec.startY - lt.y) < DOUBLETAP_MAX_GAP;
+          Math.hypot(rec.startX! - lt.x, rec.startY! - lt.y) < DOUBLETAP_MAX_GAP;
         if (isDouble) {
           // 取消当前 stroke (还没 endStroke 的情况)
           if (rec.role === "draw") this.board.cancelStroke(e.pointerId);
@@ -466,7 +536,7 @@ export class InputController {
             this.board.strokes = this.board.strokes.filter((x) => x !== lt.stroke);
             this.board.requestRender();
             if (lt.stroke.id != null) deleteStrokes([lt.stroke.id]).catch(() => {});
-            const ui = this.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke));
+            const ui = this.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke!));
             if (ui >= 0) { this.undoStack.splice(ui, 1); this._emitHistChange(); }
           }
           this._lastTap = null;
@@ -474,7 +544,7 @@ export class InputController {
           this.onChange();
           return;
         }
-        this._lastTap = { time: now, x: rec.startX, y: rec.startY, stroke: null };
+        this._lastTap = { time: now, x: rec.startX!, y: rec.startY!, stroke: null };
       } else {
         this._lastTap = null;
       }
@@ -506,7 +576,7 @@ export class InputController {
   }
 
   // ---- text-create 矩形预览 ----
-  _updateTextDraft(x0, y0, x1, y1, show) {
+  _updateTextDraft(x0: number, y0: number, x1: number, y1: number, show: boolean): void {
     if (!this._textDraft) this._textDraft = document.getElementById("textDraftRect");
     const el = this._textDraft;
     if (!el) return;
@@ -520,13 +590,13 @@ export class InputController {
   }
 
   // ---- gesture (2 finger pan + pinch + multi-finger tap) ----
-  _gestureTouches() {
+  _gestureTouches(): PointerRec[] {
     return [...this.pointers.values()].filter(
       (p) => p.pointerType === "touch" && p.role !== "ignore",
     );
   }
   // 进 / 升级 gesture 时刷一遍 tap 快照
-  _updateGestureTapSnapshot() {
+  _updateGestureTapSnapshot(): void {
     const touches = this._gestureTouches();
     if (!this._gestureTap) {
       this._gestureTap = {
@@ -551,7 +621,7 @@ export class InputController {
       this._gestureTap.maxCount = touches.length;
     }
   }
-  _beginGesture() {
+  _beginGesture(): void {
     const touches = this._gestureTouches();
     if (touches.length < 2) return;
     const [a, b] = touches;
@@ -566,7 +636,7 @@ export class InputController {
     };
     document.body.dataset.panning = "1";
   }
-  _updateGesture() {
+  _updateGesture(): void {
     const touches = this._gestureTouches();
     if (touches.length < 2 || !this.gestureStart) return;
     const [a, b] = touches;
@@ -584,7 +654,7 @@ export class InputController {
     const newTy = midY - (g.midY - g.vp.ty) * actualK;
     this.board.setViewport(newTx, newTy, newScale);
   }
-  _endGesture() {
+  _endGesture(): void {
     this.gestureStart = null;
     delete document.body.dataset.panning;
   }
@@ -592,7 +662,7 @@ export class InputController {
   // ---- ghost pointer 自愈 ----
   // 清掉久未更新的"鬼"触点 (iOS 吞了它的 pointerup)。在每次 _down 开头跑一遍，
   // 避免鬼指针和真触点凑成假双指 → 误触发撤销/缩放。
-  _purgeStalePointers() {
+  _purgeStalePointers(): void {
     const now = performance.now();
     let removed = false;
     for (const [pid, p] of this.pointers) {
@@ -613,7 +683,7 @@ export class InputController {
 
   // 笔尖落下时把所有 touch 当掌触清掉（含没收到 up 的 ghost）。清得比 stale purge 狠：
   // 不看时间，pen down 即清。清完收掉任何 gesture / tap 残留，免得掌触抬起时假双指误撤销。
-  _purgeAllTouches() {
+  _purgeAllTouches(): void {
     for (const [pid, p] of this.pointers) {
       if (p.pointerType !== "touch") continue;
       if (p.role === "draw") this.board.cancelStroke(pid);
@@ -626,7 +696,7 @@ export class InputController {
 
   // 失焦 / 切后台 / 系统打断时，丢弃所有在途指针，回到干净基线。
   // 防止"切走再切回"时残留的半截手势被当成真输入。
-  cancelAllPointers() {
+  cancelAllPointers(): void {
     for (const [pid, p] of this.pointers) {
       if (p.role === "draw") this.board.cancelStroke(pid);
     }
@@ -639,16 +709,16 @@ export class InputController {
   }
 
   // ---- erase ----
-  _beginErase() {
+  _beginErase(): void {
     this.eraseSession = { ids: new Set(), strokes: [] };
   }
-  _doErase(sx, sy) {
+  _doErase(sx: number, sy: number): void {
     if (!this.eraseSession) return;
     const { x: wx, y: wy } = this.board.screenToWorld(sx, sy);
     const r = ERASER_RADIUS_SCREEN / this.board.viewport.scale;
     const hits = this.board.hitStrokesAt(wx, wy, r);
     if (!hits.length) return;
-    const newIds = [];
+    const newIds: number[] = [];
     for (const s of hits) {
       if (s.id == null) continue; // 还未入库 (理论上不会，因为是 strokes 数组里的)
       if (this.eraseSession.ids.has(s.id)) continue;
@@ -660,7 +730,7 @@ export class InputController {
       this.board.removeStrokesByIds(newIds);
     }
   }
-  _commitErase() {
+  _commitErase(): void {
     if (!this.eraseSession) return;
     const sess = this.eraseSession;
     this.eraseSession = null;
@@ -676,7 +746,7 @@ export class InputController {
 
   // ---- 套索选区 ----
   // 松手：套索多边形 → 选中集。太小 (几乎是点击) → 只清选区。
-  _finishLasso() {
+  _finishLasso(): void {
     const pts = this._lassoPts;
     this._lassoPts = null;
     this.board.setLasso(null);
@@ -685,14 +755,14 @@ export class InputController {
     this.board.setSelection(hits);
     this.status(hits.length ? `已选 ${hits.length} 项` : "空选区");
   }
-  _abandonLasso() {
+  _abandonLasso(): void {
     this._lassoPts = null;
     this.board.setLasso(null);
   }
   // 移动选区收尾：持久化每个 moved stroke + 推 move 撤销。没真移动就不记。
-  _commitMove(rec) {
+  _commitMove(rec: PointerRec): void {
     if (!rec) return;
-    const dx = rec.totalDx, dy = rec.totalDy;
+    const dx = rec.totalDx!, dy = rec.totalDy!;
     rec.totalDx = 0; rec.totalDy = 0;
     if (!dx && !dy) return;
     const strokes = this.board.selection.slice();
@@ -707,10 +777,10 @@ export class InputController {
     this.onChange();
   }
   // 删除选区 (键盘 Delete / chip)。复用 erase 撤销类型：undo 会原样插回、文字浮层自动对账。
-  deleteSelection() {
+  deleteSelection(): void {
     const strokes = this.board.selection.slice();
     if (!strokes.length) return;
-    const ids = strokes.map((s) => s.id).filter((x) => x != null);
+    const ids = strokes.map((s) => s.id).filter((x): x is number => x != null);
     this.board.clearSelection();
     this.board.removeStrokesByIds(ids);
     deleteStrokes(ids).then(() => {
@@ -729,7 +799,7 @@ export class InputController {
   //   mouse wheel + ctrl              → ctrlKey=true, deltaMode 视浏览器 (Edge/Chrome=0 但 |dy|=100；FF=1)，每秒 1-3 个 tick
   // 用 deltaMode + |deltaY| 量级判定，不同分支用不同 k。
   // 阈值 80 是经验值 (鼠标 tick 至少 100，触控板单个 event 通常 < 20)。
-  _wheel(e) {
+  _wheel(e: WheelEvent): void {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       const smooth = e.deltaMode === 0 && Math.abs(e.deltaY) < 80;
@@ -744,8 +814,9 @@ export class InputController {
   }
 
   // ---- keys ----
-  _keydown(e) {
-    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  _keydown(e: KeyboardEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
     if (e.code === "Space" && !this.spaceDown) {
       this.spaceDown = true;
       document.body.dataset.spacePan = "1";
@@ -783,30 +854,30 @@ export class InputController {
     else if (e.key === "=" || e.key === "+") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.2);
     else if (e.key === "-" || e.key === "_") this.board.zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.2);
   }
-  _keyup(e) {
+  _keyup(e: KeyboardEvent): void {
     if (e.code === "Space") {
       this.spaceDown = false;
       delete document.body.dataset.spacePan;
     }
   }
-  _emitTool(tool) { window.dispatchEvent(new CustomEvent("sp:settool", { detail: tool })); }
-  _emitGridCycle() { window.dispatchEvent(new CustomEvent("sp:gridcycle")); }
+  _emitTool(tool: ToolName): void { window.dispatchEvent(new CustomEvent("sp:settool", { detail: tool })); }
+  _emitGridCycle(): void { window.dispatchEvent(new CustomEvent("sp:gridcycle")); }
 
   // ---- undo/redo ----
-  _pushUndo(entry) {
+  _pushUndo(entry: UndoEntry): void {
     this.undoStack.push(entry);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack.length = 0;
     this._emitHistChange();
   }
-  canUndo() { return this.undoStack.length > 0; }
-  canRedo() { return this.redoStack.length > 0; }
+  canUndo(): boolean { return this.undoStack.length > 0; }
+  canRedo(): boolean { return this.redoStack.length > 0; }
 
-  async undo() {
+  async undo(): Promise<void> {
     const e = this.undoStack.pop();
     if (!e) return;
     if (e.type === "add") {
-      const ids = e.strokes.map((s) => s.id).filter((x) => x != null);
+      const ids = e.strokes.map((s) => s.id).filter((x): x is number => x != null);
       await deleteStrokes(ids).catch(() => {});
       this.board.removeStrokesByIds(ids);
     } else if (e.type === "erase") {
@@ -824,7 +895,7 @@ export class InputController {
     this._emitHistChange();
     this.onChange();
   }
-  async redo() {
+  async redo(): Promise<void> {
     const e = this.redoStack.pop();
     if (!e) return;
     if (e.type === "add") {
@@ -834,7 +905,7 @@ export class InputController {
       }
       this.board.requestRender();
     } else if (e.type === "erase") {
-      const ids = e.strokes.map((s) => s.id).filter((x) => x != null);
+      const ids = e.strokes.map((s) => s.id).filter((x): x is number => x != null);
       await deleteStrokes(ids).catch(() => {});
       this.board.removeStrokesByIds(ids);
     } else if (e.type === "move") {
@@ -846,13 +917,13 @@ export class InputController {
     this.onChange();
   }
 
-  clearHistory() {
+  clearHistory(): void {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this._emitHistChange();
   }
 
-  _emitHistChange() {
+  _emitHistChange(): void {
     window.dispatchEvent(new CustomEvent("sp:histchange", {
       detail: { canUndo: this.canUndo(), canRedo: this.canRedo() },
     }));
@@ -868,9 +939,9 @@ export class InputController {
 //   - 算完 raw 后过一道 LPF (rec.smP，α=PRESSURE_SMOOTH_ALPHA)：damp Pencil 自带
 //     的 ~10Hz 握笔抖动 + 削传感器尖刺。sentinel rec.smP < 0 = 首颗用 raw
 //     (这样 tap / 短点子直接是 raw 满压，不被 LPF 拖)
-function effectivePressureFor(rec, e, enabled) {
+function effectivePressureFor(rec: PointerRec, e: PointerEvent, enabled: boolean): number {
   if (!enabled) return 1;
-  let raw;
+  let raw: number;
   if (e.pointerType === "mouse") {
     raw = 0.5;
   } else {
@@ -882,7 +953,7 @@ function effectivePressureFor(rec, e, enabled) {
       rec.lastP = raw;
     }
   }
-  if (rec.smP < 0) rec.smP = raw;
+  if (rec.smP == null || rec.smP < 0) rec.smP = raw;
   else rec.smP += PRESSURE_SMOOTH_ALPHA * (raw - rec.smP);
   return rec.smP;
 }

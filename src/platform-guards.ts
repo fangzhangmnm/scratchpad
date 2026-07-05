@@ -6,15 +6,15 @@
 //   - 文本编辑用 <textarea>，需要可选中/可弹 callout → 对输入框放行。
 // 全程 capture 阶段 + 非 passive，确保抢在系统前面。
 
-const EDITABLE = (t) =>
-  t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
+const EDITABLE = (t: EventTarget | null): boolean =>
+  t instanceof HTMLElement && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
 
-export function installPlatformGuards({ onLostPointers } = {}) {
-  const opts = { passive: false, capture: true };
+export function installPlatformGuards({ onLostPointers }: { onLostPointers?: () => void } = {}): void {
+  const opts: AddEventListenerOptions = { passive: false, capture: true };
 
   // iOS Safari 私有双指缩放事件 — 不拦会把整页 (PWA 外壳) 放大错位
   for (const t of ["gesturestart", "gesturechange", "gestureend"]) {
-    document.addEventListener(t, (e) => e.preventDefault(), opts);
+    document.addEventListener(t, (e: Event) => e.preventDefault(), opts);
   }
 
   // 三指及以上 touchstart：挡掉 iPad 系统三指手势 / 分屏 / Slide Over 抢手势。

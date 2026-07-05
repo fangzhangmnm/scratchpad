@@ -1,0 +1,29 @@
+{
+  // ScratchPad TS 护栏。build.sh 的 tsc --noEmit 门读这个（见 scripts/build.sh §0）。
+  // 运行时打包仍是 esbuild（strip 类型、不看 tsconfig）；这里只做类型检查。
+  //
+  // moduleResolution: "bundler" —— import 说明符沿用 "./board.js" 但物理文件是 board.ts，
+  //   bundler 解析会把 .js 映射到 .ts（与 esbuild 行为一致），故迁 TS 后无需改任何 import 路径。
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": [],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "useDefineForClassFields": true,
+
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "exclude": ["src/vendor", "node_modules", "dist", "tools"]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "scratchpad",
+  "version": "0.0.0",
+  "private": true,
+  "description": "阅后即焚手写白板 PWA（纯本地无云）。构建见 scripts/build.sh。",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "bash scripts/build.sh"
+  },
+  "devDependencies": {
+    "typescript": "5.7.2"
+  }
+}

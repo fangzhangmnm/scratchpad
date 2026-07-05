@@ -9,14 +9,44 @@
 // 渲染时按当前主题解析 "ink" → 当前 ink 色 (theme swap 时自动重渲)。
 
 import { getMeta, setMeta, debounce } from "./db.js";
+import type {
+  Viewport,
+  GridMode,
+  ThemeColors,
+  WorldBox,
+  Point,
+  InkStroke,
+  Stroke,
+} from "./types.js";
 
-export const GRID_MODES = ["none", "dots", "squares", "lines"]; // 4 档循环
+export const GRID_MODES: GridMode[] = ["none", "dots", "squares", "lines"]; // 4 档循环
 const GRID_SIZE_WORLD = 32; // 一个网格 = 32 world units
 
 export class Board {
-  constructor(canvas) {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  dpr: number;
+  strokes: Stroke[];
+  liveStrokes: Map<number, InkStroke>;
+  viewport: Viewport;
+  gridMode: GridMode;
+  minScale: number;
+  maxScale: number;
+  _raf: number | null;
+  _inkColor: string;
+  _bgColor: string;
+  _gridColor: string;
+  _selColor: string;
+  selection: Stroke[];
+  _lassoWorld: number[] | null;
+  onSelectionChange: (() => void) | null;
+  onStrokesMoved: (() => void) | null;
+  _persistViewport: () => void;
+  _initialized?: boolean;
+
+  constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d", { alpha: false });
+    this.ctx = canvas.getContext("2d", { alpha: false })!;
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
     this.strokes = [];                  // 已 commit 的笔画
     this.liveStrokes = new Map();       // pointerId → 正在画的 stroke (未入库)
@@ -59,12 +89,12 @@ export class Board {
     }, 300);
   }
 
-  setStrokes(strokes) {
+  setStrokes(strokes: Stroke[]): void {
     this.strokes = strokes.map((s) => ensureBbox(s));
     this.requestRender();
   }
 
-  async restoreViewport() {
+  async restoreViewport(): Promise<void> {
     const v = await getMeta("viewport").catch(() => null);
     if (v && typeof v.tx === "number") {
       this.viewport = { tx: v.tx, ty: v.ty, scale: clamp(v.scale, this.minScale, this.maxScale) };
@@ -73,26 +103,26 @@ export class Board {
     this.requestRender();
   }
 
-  resetViewport() {
+  resetViewport(): void {
     this.viewport = { tx: this.canvas.clientWidth / 2, ty: this.canvas.clientHeight / 2, scale: 1 };
     this._persistViewport();
     this.requestRender();
   }
 
-  setGridMode(mode) {
+  setGridMode(mode: GridMode): void {
     if (!GRID_MODES.includes(mode)) return;
     this.gridMode = mode;
     this._persistViewport();
     this.requestRender();
   }
 
-  cycleGridMode() {
+  cycleGridMode(): GridMode {
     const i = GRID_MODES.indexOf(this.gridMode);
     this.setGridMode(GRID_MODES[(i + 1) % GRID_MODES.length]);
     return this.gridMode;
   }
 
-  setThemeColors({ ink, bg, line }) {
+  setThemeColors({ ink, bg, line }: ThemeColors): void {
     this._inkColor = ink;
     this._bgColor = bg;
     this._gridColor = line;
@@ -100,17 +130,17 @@ export class Board {
   }
 
   // 屏幕 ↔ 世界
-  screenToWorld(sx, sy) {
+  screenToWorld(sx: number, sy: number): Point {
     const { tx, ty, scale } = this.viewport;
     return { x: (sx - tx) / scale, y: (sy - ty) / scale };
   }
-  worldToScreen(wx, wy) {
+  worldToScreen(wx: number, wy: number): Point {
     const { tx, ty, scale } = this.viewport;
     return { x: wx * scale + tx, y: wy * scale + ty };
   }
 
   // 平移 (屏幕 px 增量)
-  pan(dx, dy) {
+  pan(dx: number, dy: number): void {
     this.viewport.tx += dx;
     this.viewport.ty += dy;
     this._persistViewport();
@@ -118,7 +148,7 @@ export class Board {
   }
 
   // 以屏幕坐标 anchor 缩放 (factor > 1 放大)
-  zoomAt(anchorX, anchorY, factor) {
+  zoomAt(anchorX: number, anchorY: number, factor: number): void {
     const oldScale = this.viewport.scale;
     const newScale = clamp(oldScale * factor, this.minScale, this.maxScale);
     if (newScale === oldScale) return;
@@ -131,7 +161,7 @@ export class Board {
   }
 
   // 直接设 viewport (gesture pan+zoom 用)
-  setViewport(tx, ty, scale) {
+  setViewport(tx: number, ty: number, scale: number): void {
     this.viewport.tx = tx;
     this.viewport.ty = ty;
     this.viewport.scale = clamp(scale, this.minScale, this.maxScale);
@@ -140,8 +170,8 @@ export class Board {
   }
 
   // ---- live stroke (画的过程中) ----
-  beginStroke(pointerId, color, width, x, y, pressure) {
-    const s = {
+  beginStroke(pointerId: number, color: string, width: number, x: number, y: number, pressure: number): InkStroke {
+    const s: InkStroke = {
       color,
       width,
       points: [x, y, pressure],
@@ -151,17 +181,18 @@ export class Board {
     this.requestRender();
     return s;
   }
-  extendStroke(pointerId, x, y, pressure) {
+  extendStroke(pointerId: number, x: number, y: number, pressure: number): void {
     const s = this.liveStrokes.get(pointerId);
     if (!s) return;
-    s.points.push(x, y, pressure);
+    // live stroke 的 points 一定是 number[]
+    (s.points as number[]).push(x, y, pressure);
     if (x < s.bbox[0]) s.bbox[0] = x;
     if (y < s.bbox[1]) s.bbox[1] = y;
     if (x > s.bbox[2]) s.bbox[2] = x;
     if (y > s.bbox[3]) s.bbox[3] = y;
     this.requestRender();
   }
-  endStroke(pointerId) {
+  endStroke(pointerId: number): InkStroke | null {
     const s = this.liveStrokes.get(pointerId);
     if (!s) return null;
     this.liveStrokes.delete(pointerId);
@@ -172,7 +203,7 @@ export class Board {
     this.requestRender();
     return s;
   }
-  cancelStroke(pointerId) {
+  cancelStroke(pointerId: number): void {
     if (this.liveStrokes.has(pointerId)) {
       this.liveStrokes.delete(pointerId);
       this.requestRender();
@@ -180,9 +211,9 @@ export class Board {
   }
 
   // ---- 擦除 (世界半径 r 内的笔画整条删) ----
-  hitStrokesAt(wx, wy, r) {
+  hitStrokesAt(wx: number, wy: number, r: number): Stroke[] {
     const r2 = r * r;
-    const hits = [];
+    const hits: Stroke[] = [];
     for (const s of this.strokes) {
       // bbox 快筛 (text 块只用 bbox 命中，不做更精细测试)
       if (wx < s.bbox[0] - r || wx > s.bbox[2] + r ||
@@ -210,10 +241,10 @@ export class Board {
     return hits;
   }
 
-  removeStrokesByIds(ids) {
+  removeStrokesByIds(ids: number[]): void {
     if (!ids.length) return;
     const set = new Set(ids);
-    this.strokes = this.strokes.filter((s) => !set.has(s.id));
+    this.strokes = this.strokes.filter((s) => !set.has(s.id!));
     this.requestRender();
   }
 
@@ -227,7 +258,7 @@ export class Board {
   //          文字 = bbox 中心落在多边形内。都先用 bbox 快筛。
 
   // poly = 世界坐标 flat 数组 [x0,y0,x1,y1,...]。返回选中的 stroke 对象数组。
-  strokesInPolygon(poly) {
+  strokesInPolygon(poly: number[]): Stroke[] {
     if (!poly || poly.length < 6) return [];   // 至少 3 点才成面
     let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
     for (let i = 0; i < poly.length; i += 2) {
@@ -236,7 +267,7 @@ export class Board {
       if (poly[i+1] < py0) py0 = poly[i+1];
       if (poly[i+1] > py1) py1 = poly[i+1];
     }
-    const hits = [];
+    const hits: Stroke[] = [];
     for (const s of this.strokes) {
       // bbox 快筛：完全在套索 bbox 外的直接跳过
       if (s.bbox[2] < px0 || s.bbox[0] > px1 || s.bbox[3] < py0 || s.bbox[1] > py1) continue;
@@ -257,7 +288,7 @@ export class Board {
 
   // 唯一的"移动 stroke"choke point。dx/dy = 世界坐标增量。就地改 points/x/y + bbox。
   // 手写 stroke 的 points 是 Float32Array (已 commit)，就地加即可；文字改 x/y。
-  translateStrokes(strokes, dx, dy) {
+  translateStrokes(strokes: Stroke[], dx: number, dy: number): void {
     if (!dx && !dy) return;
     for (const s of strokes) {
       if (s.type === "text") {
@@ -272,12 +303,12 @@ export class Board {
     this.requestRender();
   }
 
-  setSelection(strokes) {
+  setSelection(strokes: Stroke[] | null): void {
     this.selection = strokes || [];
     if (this.onSelectionChange) this.onSelectionChange();
     this.requestRender();
   }
-  clearSelection() {
+  clearSelection(): void {
     if (!this.selection.length && !this._lassoWorld) return;
     this.selection = [];
     this._lassoWorld = null;
@@ -285,7 +316,7 @@ export class Board {
     this.requestRender();
   }
   // 选区并集 bbox (世界坐标)；空选区返回 null。命中测试"拖点在选区内 → 移动"用。
-  selectionBBox() {
+  selectionBBox(): WorldBox | null {
     if (!this.selection.length) return null;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const s of this.selection) {
@@ -297,13 +328,13 @@ export class Board {
     return { x0, y0, x1, y1 };
   }
   // 套索拖动中的多边形 (世界坐标 flat)。null = 没在拖。
-  setLasso(worldPoly) {
+  setLasso(worldPoly: number[] | null): void {
     this._lassoWorld = worldPoly;
     this.requestRender();
   }
 
   // 整体 bbox (导出 "全部内容" 用)
-  computeBoundingBox() {
+  computeBoundingBox(): WorldBox | null {
     if (!this.strokes.length) return null;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const s of this.strokes) {
@@ -316,7 +347,7 @@ export class Board {
   }
 
   // ---- 渲染 ----
-  resize() {
+  resize(): void {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -337,7 +368,7 @@ export class Board {
     this.requestRender();
   }
 
-  requestRender() {
+  requestRender(): void {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
       this._raf = null;
@@ -345,7 +376,7 @@ export class Board {
     });
   }
 
-  render() {
+  render(): void {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -373,7 +404,7 @@ export class Board {
 
   // 选中 stroke 的 bbox 高亮 + 正在拖的套索多边形。都在屏幕坐标画 (由 world bbox 换算)，
   // 手写和文字统一走 bbox → 文字块也一样描框。
-  _drawSelection() {
+  _drawSelection(): void {
     const ctx = this.ctx;
     const { tx, ty, scale } = this.viewport;
 
@@ -414,7 +445,7 @@ export class Board {
     }
   }
 
-  _worldViewport() {
+  _worldViewport(): number[] {
     const w = this.canvas.clientWidth || this.canvas.width / this.dpr;
     const h = this.canvas.clientHeight || this.canvas.height / this.dpr;
     const { tx, ty, scale } = this.viewport;
@@ -424,11 +455,11 @@ export class Board {
     ];
   }
 
-  _drawStroke(s) {
+  _drawStroke(s: InkStroke): void {
     drawStroke(this.ctx, s, this.viewport, this._inkColor);
   }
 
-  _drawGrid() {
+  _drawGrid(): void {
     if (this.gridMode === "none") return;
     const ctx = this.ctx;
     const { tx, ty, scale } = this.viewport;
@@ -501,7 +532,7 @@ export class Board {
 //
 // 压感开关 = 数据层 (写新笔画时 pressure=1)，不是渲染层。
 
-export function drawStroke(ctx, s, viewport, inkColor) {
+export function drawStroke(ctx: CanvasRenderingContext2D, s: InkStroke, viewport: Viewport, inkColor: string): void {
   const { tx, ty, scale } = viewport;
   const color = s.color === "ink" ? inkColor : s.color;
   const p = s.points;
@@ -601,14 +632,14 @@ export function drawStroke(ctx, s, viewport, inkColor) {
 
 // ---- 工具函数 ----
 
-function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function clamp(x: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, x)); }
 
-function aabbIntersect(b, v) {
+function aabbIntersect(b: readonly number[], v: readonly number[]): boolean {
   // b = [x0,y0,x1,y1], v 同
   return !(b[2] < v[0] || b[0] > v[2] || b[3] < v[1] || b[1] > v[3]);
 }
 
-function segDistSq(px, py, ax, ay, bx, by) {
+function segDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax, dy = by - ay;
   const len2 = dx*dx + dy*dy;
   if (len2 === 0) {
@@ -623,7 +654,7 @@ function segDistSq(px, py, ax, ay, bx, by) {
 }
 
 // 射线法：点 (px,py) 是否在多边形 poly (flat [x,y,...]) 内。
-function pointInPolygon(px, py, poly) {
+function pointInPolygon(px: number, py: number, poly: readonly number[]): boolean {
   let inside = false;
   const n = poly.length / 2;
   for (let i = 0, j = n - 1; i < n; j = i++) {
@@ -637,9 +668,9 @@ function pointInPolygon(px, py, poly) {
   return inside;
 }
 
-function ensureBbox(s) {
+function ensureBbox(s: Stroke): Stroke {
   if (s.bbox && s.bbox.length === 4) return s;
-  const p = s.points;
+  const p = (s as InkStroke).points;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < p.length; i += 3) {
     const x = p[i], y = p[i+1];

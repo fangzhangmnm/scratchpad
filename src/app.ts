@@ -9,51 +9,58 @@ import {
   copyPngCurrentView, sharePngAll, isShareSupported,
 } from "./export.js";
 import { TextManager, ensureKatex } from "./textbox.js";
+import type { ToolName, Stroke, TextPlaceRect } from "./types.js";
 
 const THEMES = ["auto", "day", "night"];
-const THEME_LABEL = { auto: "跟随系统", day: "日", night: "夜" };
+const THEME_LABEL: Record<string, string> = { auto: "跟随系统", day: "日", night: "夜" };
 
 const els = {
-  board: document.getElementById("board"),
-  topBar: document.getElementById("topBar"),
-  hud: document.getElementById("hud"),
-  zoomLabel: document.getElementById("zoomLabel"),
-  statusLabel: document.getElementById("statusLabel"),
-  widthSlider: document.getElementById("widthSlider"),
-  clearBtn: document.getElementById("clearButton"),
-  pressureBtn: document.getElementById("pressureButton"),
-  menuBtn: document.getElementById("menuButton"),
-  appMenu: document.getElementById("appMenu"),
-  menuVersion: document.getElementById("menuVersion"),
-  menuGrid: document.getElementById("menuGrid"),
-  menuFit: document.getElementById("menuFit"),
-  menuExport: document.getElementById("menuExport"),
-  menuTheme: document.getElementById("menuTheme"),
-  menuSingleFinger: document.getElementById("menuSingleFinger"),
-  menuForceUpdate: document.getElementById("menuForceUpdate"),
-  toolBtns: [...document.querySelectorAll(".tool[data-tool]")],
-  swatches: [...document.querySelectorAll(".swatch[data-color]")],
-  exportSheet: document.getElementById("exportSheet"),
-  shareAllBtn: document.getElementById("shareAllBtn"),
-  exportBackdrop: document.getElementById("exportBackdrop"),
-  clearSheet: document.getElementById("clearSheet"),
-  clearBackdrop: document.getElementById("clearBackdrop"),
-  updateToast: document.getElementById("updateToast"),
-  updateReload: document.getElementById("updateToastReload"),
-  updateDismiss: document.getElementById("updateToastDismiss"),
-  textOverlayInner: document.getElementById("textOverlayInner"),
-  textEditorWrap: document.getElementById("textEditorWrap"),
-  textEditor: document.getElementById("textEditor"),
-  selActions: document.getElementById("selActions"),
-  selDelete: document.getElementById("selDelete"),
-  selDone: document.getElementById("selDone"),
+  board: document.getElementById("board") as HTMLCanvasElement,
+  topBar: document.getElementById("topBar") as HTMLElement,
+  hud: document.getElementById("hud") as HTMLElement,
+  zoomLabel: document.getElementById("zoomLabel") as HTMLElement,
+  statusLabel: document.getElementById("statusLabel") as HTMLElement,
+  widthSlider: document.getElementById("widthSlider") as HTMLInputElement,
+  clearBtn: document.getElementById("clearButton") as HTMLElement,
+  pressureBtn: document.getElementById("pressureButton") as HTMLElement,
+  menuBtn: document.getElementById("menuButton") as HTMLElement,
+  appMenu: document.getElementById("appMenu") as HTMLElement,
+  menuVersion: document.getElementById("menuVersion") as HTMLElement,
+  menuGrid: document.getElementById("menuGrid") as HTMLElement,
+  menuFit: document.getElementById("menuFit") as HTMLElement,
+  menuExport: document.getElementById("menuExport") as HTMLElement,
+  menuTheme: document.getElementById("menuTheme") as HTMLElement,
+  menuSingleFinger: document.getElementById("menuSingleFinger") as HTMLElement,
+  menuForceUpdate: document.getElementById("menuForceUpdate") as HTMLElement,
+  toolBtns: [...document.querySelectorAll<HTMLElement>(".tool[data-tool]")],
+  swatches: [...document.querySelectorAll<HTMLElement>(".swatch[data-color]")],
+  exportSheet: document.getElementById("exportSheet") as HTMLElement,
+  shareAllBtn: document.getElementById("shareAllBtn") as HTMLElement,
+  exportBackdrop: document.getElementById("exportBackdrop") as HTMLElement,
+  clearSheet: document.getElementById("clearSheet") as HTMLElement,
+  clearBackdrop: document.getElementById("clearBackdrop") as HTMLElement,
+  updateToast: document.getElementById("updateToast") as HTMLElement,
+  updateReload: document.getElementById("updateToastReload") as HTMLElement,
+  updateDismiss: document.getElementById("updateToastDismiss") as HTMLElement,
+  textOverlayInner: document.getElementById("textOverlayInner") as HTMLElement,
+  textEditorWrap: document.getElementById("textEditorWrap") as HTMLElement,
+  textEditor: document.getElementById("textEditor") as HTMLTextAreaElement,
+  selActions: document.getElementById("selActions") as HTMLElement,
+  selDelete: document.getElementById("selDelete") as HTMLElement,
+  selDone: document.getElementById("selDone") as HTMLElement,
 };
 
-function safeLS(key, fallback) {
+function safeLS(key: string, fallback: string | null = null): string | null {
   try { return localStorage.getItem(key); } catch { return fallback; }
 }
 
-const state = {
+const state: {
+  tool: ToolName;
+  color: string;
+  width: number;
+  pressureEnabled: boolean;
+  singleFingerDraw: boolean;
+} = {
   tool: "pen",
   color: "ink",
   width: 2.2,
@@ -69,15 +76,15 @@ const textManager = new TextManager(board, {
   editorWrap: els.textEditorWrap,
   getColor: () => state.color,
   getInkColor: () => readCssColor("--ink"),
-  onAdd: (s) => { input._pushUndo({ type: "add", strokes: [s] }); setStatus("文字 · 已添加"); },
-  onDelete: (s) => { input._pushUndo({ type: "erase", strokes: [s] }); setStatus("文字 · 已删除"); },
+  onAdd: (s: Stroke) => { input._pushUndo({ type: "add", strokes: [s] }); setStatus("文字 · 已添加"); },
+  onDelete: (s: Stroke) => { input._pushUndo({ type: "erase", strokes: [s] }); setStatus("文字 · 已删除"); },
 });
 
 // 主题
-function readCssColor(name) {
+function readCssColor(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
-function applyThemeColorsToBoard() {
+function applyThemeColorsToBoard(): void {
   board.setThemeColors({
     ink: readCssColor("--ink"),
     bg: readCssColor("--bg"),
@@ -86,9 +93,9 @@ function applyThemeColorsToBoard() {
   textManager.refreshThemeColors();
 }
 
-let theme = localStorage.getItem("scratchpad.theme") || "auto";
+let theme: string = localStorage.getItem("scratchpad.theme") || "auto";
 if (!THEMES.includes(theme)) theme = "auto";
-function applyTheme(t) {
+function applyTheme(t: string): void {
   theme = t;
   document.documentElement.setAttribute("data-theme", t);
   localStorage.setItem("scratchpad.theme", t);
@@ -102,7 +109,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 // 工具按钮
-function setTool(t) {
+function setTool(t: ToolName): void {
   state.tool = t;
   for (const b of els.toolBtns) b.setAttribute("aria-pressed", b.dataset.tool === t ? "true" : "false");
   document.body.dataset.tool = t;
@@ -112,7 +119,7 @@ function setTool(t) {
   if (t === "text") ensureKatex().catch((err) => { console.error(err); setStatus("KaTeX 加载失败"); });
 }
 for (const b of els.toolBtns) {
-  b.addEventListener("click", () => setTool(b.dataset.tool));
+  b.addEventListener("click", () => setTool(b.dataset.tool as ToolName));
 }
 window.addEventListener("sp:settool", (e) => setTool(e.detail));
 // Apple Pencil 屏幕双击 → 笔↔橡皮
@@ -124,12 +131,12 @@ window.addEventListener("sp:doubletap", () => {
 setTool(state.tool);
 
 // 颜色 swatch
-function setColor(c) {
+function setColor(c: string): void {
   state.color = c;
   for (const s of els.swatches) s.setAttribute("aria-pressed", s.dataset.color === c ? "true" : "false");
 }
 for (const s of els.swatches) {
-  s.addEventListener("click", () => setColor(s.dataset.color));
+  s.addEventListener("click", () => setColor(s.dataset.color as string));
 }
 
 // 笔粗
@@ -139,7 +146,7 @@ els.widthSlider.addEventListener("input", () => {
 state.width = parseFloat(els.widthSlider.value);
 
 // 压感开关 — 默认关。只影响 *新* 笔画的写入 (off 时 pressure=1)，老笔画不变。
-function applyPressure(on) {
+function applyPressure(on: boolean): void {
   state.pressureEnabled = !!on;
   if (els.pressureBtn) {
     els.pressureBtn.setAttribute("aria-pressed", state.pressureEnabled ? "true" : "false");
@@ -157,8 +164,8 @@ applyPressure(state.pressureEnabled);
 // undo/redo 按钮已移除：撤销/重做走键盘 (Ctrl+Z / Ctrl+Shift+Z) + 双指/三指 tap。
 
 // Grid（菜单项，循环切换；菜单保持打开方便连点）
-function refreshGridLabel() {
-  const map = { none: "无", dots: "点", squares: "方", lines: "横" };
+function refreshGridLabel(): void {
+  const map: Record<string, string> = { none: "无", dots: "点", squares: "方", lines: "横" };
   els.menuGrid.textContent = `网格：${map[board.gridMode]}`;
 }
 els.menuGrid.addEventListener("click", () => {
@@ -177,11 +184,11 @@ els.menuFit.addEventListener("click", () => {
 });
 
 // Export sheet
-function openSheet(sheet, backdrop) {
+function openSheet(sheet: HTMLElement, backdrop: HTMLElement): void {
   backdrop.classList.remove("hidden");
   sheet.classList.remove("hidden");
 }
-function closeSheet(sheet, backdrop) {
+function closeSheet(sheet: HTMLElement, backdrop: HTMLElement): void {
   backdrop.classList.add("hidden");
   sheet.classList.add("hidden");
 }
@@ -192,7 +199,7 @@ els.menuExport.addEventListener("click", () => {
 });
 els.exportBackdrop.addEventListener("click", () => closeSheet(els.exportSheet, els.exportBackdrop));
 els.exportSheet.addEventListener("click", async (e) => {
-  const action = e.target.closest("[data-export]")?.dataset.export;
+  const action = (e.target as HTMLElement).closest<HTMLElement>("[data-export]")?.dataset.export;
   if (!action) return;
   closeSheet(els.exportSheet, els.exportBackdrop);
   if (action === "cancel") return;
@@ -217,11 +224,12 @@ els.exportSheet.addEventListener("click", async (e) => {
     }
   } catch (err) {
     // 用户取消分享 / 复制失败 / 没东西可导出
-    if (err && err.name === "AbortError") {
+    const e2 = err as { name?: string; message?: string } | null;
+    if (e2 && e2.name === "AbortError") {
       setStatus("已取消");
     } else {
       console.error("export failed", err);
-      setStatus(err?.message?.includes("空") ? "没东西可导出" : "导出失败");
+      setStatus(e2?.message?.includes("空") ? "没东西可导出" : "导出失败");
     }
   }
 });
@@ -230,7 +238,7 @@ els.exportSheet.addEventListener("click", async (e) => {
 els.clearBtn.addEventListener("click", () => openSheet(els.clearSheet, els.clearBackdrop));
 els.clearBackdrop.addEventListener("click", () => closeSheet(els.clearSheet, els.clearBackdrop));
 els.clearSheet.addEventListener("click", async (e) => {
-  const a = e.target.closest("[data-clear]")?.dataset.clear;
+  const a = (e.target as HTMLElement).closest<HTMLElement>("[data-clear]")?.dataset.clear;
   if (!a) return;
   closeSheet(els.clearSheet, els.clearBackdrop);
   if (a !== "confirm") return;
@@ -242,18 +250,18 @@ els.clearSheet.addEventListener("click", async (e) => {
 });
 
 // ☰ 菜单：开关 / 锚定 / 外部点击 / Esc
-function positionMenu() {
+function positionMenu(): void {
   const r = els.menuBtn.getBoundingClientRect();
   els.appMenu.style.top = (r.bottom + 6) + "px";
   // 右对齐到按钮右缘，clamp 进视口
   els.appMenu.style.right = Math.max(8, window.innerWidth - r.right) + "px";
 }
-function openMenu() {
+function openMenu(): void {
   positionMenu();
   els.appMenu.classList.remove("hidden");
   els.menuBtn.setAttribute("aria-expanded", "true");
 }
-function closeMenu() {
+function closeMenu(): void {
   els.appMenu.classList.add("hidden");
   els.menuBtn.setAttribute("aria-expanded", "false");
 }
@@ -263,7 +271,7 @@ els.menuBtn.addEventListener("click", (e) => {
 });
 document.addEventListener("pointerdown", (e) => {
   if (els.appMenu.classList.contains("hidden")) return;
-  if (els.appMenu.contains(e.target) || els.menuBtn.contains(e.target)) return;
+  if (els.appMenu.contains(e.target as Node) || els.menuBtn.contains(e.target as Node)) return;
   closeMenu();
 });
 window.addEventListener("keydown", (e) => {
@@ -279,7 +287,7 @@ els.menuTheme.addEventListener("click", () => {
 });
 
 // 单指绘画开关（默认关）：开 = 手指作画；关 = 单指惰性(防手掌误触)，平移走两指。菜单保持打开方便切。
-function applySingleFingerDraw(on) {
+function applySingleFingerDraw(on: boolean): void {
   state.singleFingerDraw = !!on;
   els.menuSingleFinger.textContent = `单指绘画：${state.singleFingerDraw ? "开" : "关"}`;
   try { localStorage.setItem("scratchpad.singleFingerDraw", state.singleFingerDraw ? "1" : "0"); } catch {}
@@ -306,16 +314,17 @@ els.menuForceUpdate.addEventListener("click", async () => {
     }
     setTimeout(() => location.reload(), 200);
   } catch (e) {
-    setStatus("清缓存失败：" + (e?.message || e), true);
+    const err = e as { message?: string } | null;
+    setStatus("清缓存失败：" + (err?.message || err), true);
   }
 });
 
 // HUD
-function updateZoomLabel() {
+function updateZoomLabel(): void {
   els.zoomLabel.textContent = Math.round(board.viewport.scale * 100) + "%";
 }
-let statusTimer = null;
-function setStatus(text, persist = false) {
+let statusTimer: ReturnType<typeof setTimeout> | null = null;
+function setStatus(text: string, persist = false): void {
   els.statusLabel.textContent = text;
   if (statusTimer) clearTimeout(statusTimer);
   if (!persist) {
@@ -340,7 +349,7 @@ const input = new InputController(board, {
   getWidth: () => state.width,
   getPressureEnabled: () => state.pressureEnabled,
   getSingleFingerDraw: () => state.singleFingerDraw,
-  onTextPlace: (rect) => textManager.openEditor(rect),
+  onTextPlace: (rect: TextPlaceRect) => textManager.openEditor(rect),
   onTextDismiss: () => textManager.dismissIfEmpty(),
   onChange: () => {},
   status: setStatus,
@@ -352,7 +361,7 @@ board.onStrokesMoved = () => textManager.refreshPositions();   // 移动后文�
 board.onSelectionChange = () => positionSelChip();
 
 // 选区浮动操作条：定位在选区上方居中 (顶部没空间就翻到下方)。空选区 / 非套索工具 → 藏。
-function positionSelChip() {
+function positionSelChip(): void {
   const bb = (state.tool === "select") ? board.selectionBBox() : null;
   if (!bb) { els.selActions.classList.add("hidden"); return; }
   const tl = board.worldToScreen(bb.x0, bb.y0);
@@ -371,7 +380,7 @@ els.selDone.addEventListener("click", () => board.clearSelection());
 installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });
 
 // 启动
-(async function boot() {
+(async function boot(): Promise<void> {
   setStatus("加载中…", true);
   try {
     const strokes = await loadAllStrokes();
@@ -402,9 +411,9 @@ installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });
 //   路径 4: visibilitychange / focus / 10min interval → registration.update()
 const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1", ""]);
 let updateDismissed = false;
-let _swRegistration = null;
+let _swRegistration: ServiceWorkerRegistration | null = null;
 
-function showUpdate() {
+function showUpdate(): void {
   if (updateDismissed) return;
   els.updateToast?.classList.remove("hidden");
 }
@@ -429,7 +438,8 @@ if (versionLabel) {
         else setStatus(`已是最新（${window.SCRATCHPAD_VERSION || "v?"}）`);
       }, 1500);
     } catch (e) {
-      setStatus("检测失败：" + (e?.message || e));
+      const err = e as { message?: string } | null;
+      setStatus("检测失败：" + (err?.message || err));
     }
   });
 }
@@ -491,8 +501,8 @@ els.updateDismiss.addEventListener("click", () => {
 });
 
 // 时间戳 (文件名用)
-function stampStr() {
+function stampStr(): string {
   const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
+  const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
