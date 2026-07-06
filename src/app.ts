@@ -76,8 +76,8 @@ const textManager = new TextManager(board, {
   editorWrap: els.textEditorWrap,
   getColor: () => state.color,
   getInkColor: () => readCssColor("--ink"),
-  onAdd: (s: Stroke) => { input._pushUndo({ type: "add", strokes: [s] }); setStatus("文字 · 已添加"); },
-  onDelete: (s: Stroke) => { input._pushUndo({ type: "erase", strokes: [s] }); setStatus("文字 · 已删除"); },
+  onAdd: (s: Stroke) => { input.history.record({ type: "add", strokes: [s] }); setStatus("文字 · 已添加"); },
+  onDelete: (s: Stroke) => { input.history.record({ type: "erase", strokes: [s] }); setStatus("文字 · 已删除"); },
 });
 
 // 主题
@@ -333,14 +333,12 @@ function setStatus(text: string, persist = false): void {
 }
 
 // hook board render → 同步文字浮层 viewport transform / DOM 对账 + 更新 HUD
-const origRender = board.render.bind(board);
-board.render = function () {
-  origRender();
+board.addRenderListener(() => {
   textManager.updateOverlayTransform();
   textManager.syncOverlay();
   updateZoomLabel();
   positionSelChip();          // 选区 chip 跟随 pan/zoom/move
-};
+});
 
 // Input controller
 const input = new InputController(board, {

@@ -130,7 +130,7 @@ export class TextManager {
   renderAll(): void {
     this.overlayInner.innerHTML = "";
     this.elById.clear();
-    for (const s of this.board.strokes) {
+    for (const s of this.board.store.all) {
       if (s.type === "text") this._renderStroke(s);
     }
   }
@@ -142,7 +142,7 @@ export class TextManager {
     // 删：DOM 里有，但 strokes 里找不到的
     if (this.elById.size > 0) {
       const live = new Set<number>();
-      for (const s of this.board.strokes) {
+      for (const s of this.board.store.all) {
         if (s.type === "text" && s.id != null) live.add(s.id);
       }
       for (const [id, el] of this.elById) {
@@ -150,7 +150,7 @@ export class TextManager {
       }
     }
     // 加：strokes 里有 text 块但 DOM 里没的 (eg undo 把刚擦掉的 text 恢复)
-    for (const s of this.board.strokes) {
+    for (const s of this.board.store.all) {
       if (s.type === "text" && s.id != null && !this.elById.has(s.id)) {
         this._renderStroke(s);
       }
@@ -245,7 +245,7 @@ export class TextManager {
   // (syncOverlay 只增删元素，不动已有元素位置；位置只在 _renderStroke 时写一次。)
   refreshPositions(): void {
     for (const [id, el] of this.elById) {
-      const s = this.board.strokes.find((x) => x.id === id);
+      const s = this.board.store.findById(id);
       if (s && s.type === "text") el.style.transform = `translate(${s.x}px, ${s.y}px)`;
     }
   }
@@ -260,7 +260,7 @@ export class TextManager {
   refreshThemeColors(): void {
     const ink = this.getInkColor();
     for (const [id, el] of this.elById) {
-      const s = this.board.strokes.find((x) => x.id === id);
+      const s = this.board.store.findById(id);
       if (s && s.color === "ink") el.style.color = ink;
     }
   }
@@ -374,7 +374,7 @@ export class TextManager {
       };
       try {
         await addStroke(stroke);     // 写入 IDB，回填 id
-        this.board.strokes.push(stroke);
+        this.board.store.add(stroke);
         this._renderStroke(stroke);
         this.onAdd(stroke);
       } catch (err) {
@@ -387,7 +387,7 @@ export class TextManager {
     if (!trimmed) {
       try {
         await deleteStrokes([existing.id!]);
-        this.board.strokes = this.board.strokes.filter((x) => x !== existing);
+        this.board.store.removeByRef(existing);
         this.removeStrokeFromOverlay(existing.id!);
         this.onDelete(existing);
       } catch (err) {

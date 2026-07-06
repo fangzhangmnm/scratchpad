@@ -19,7 +19,8 @@
 // 撤销: 每画完一笔 / 每擦一批 → 推入 undo stack。redo stack 在新动作时清空。
 
 import { addStroke, deleteStrokes, putStrokeWithId } from "./db.js";
-import type { ToolName, Viewport, Stroke, UndoEntry, TextPlaceRect } from "./types.js";
+import { History } from "./history.js";
+import type { ToolName, Viewport, Stroke, TextPlaceRect } from "./types.js";
 import type { Board } from "./board.js";
 
 type PointerRole =
@@ -126,8 +127,7 @@ export class InputController {
   gestureStart: { dist: number; midX: number; midY: number; vp: Viewport } | null;
   _gestureTap: { startTime: number; firstDownTime: number; isTap: boolean; maxCount: number; startPositions: Record<number, { x: number; y: number }> } | null;
   eraseSession: { ids: Set<number>; strokes: Stroke[] } | null;
-  undoStack: UndoEntry[];
-  redoStack: UndoEntry[];
+  history: History;
   _lastTap: { time: number; x: number; y: number; stroke: Stroke | null } | null;
   _lastPenActivity: number;
   _lassoPts: number[] | null = null;
@@ -153,8 +153,8 @@ export class InputController {
     this._gestureTap = null;      // {startTime, isTap, maxCount, startPositions} — 多指 tap 判定
     this.eraseSession = null;     // {ids: Set, strokesById: Map<id,stroke>}
 
-    this.undoStack = [];          // [{type:'add'|'erase', strokes: [stroke,...]}]
-    this.redoStack = [];
+    this.history = new History();  // [{type:'add'|'erase', strokes: [stroke,...]}]
+    this.history.onChange = () => this._emitHistChange();
     this._lastTap = null;         // {time, x, y, stroke?} — pen 或 touch 都记
     this._lastPenActivity = -Infinity;  // 最近一次笔尖落/移/抬的时刻 (ms)。掌触 tap 门用
 
@@ -533,11 +533,11 @@ export class InputController {
           // hold / pan 角色无 stroke 可撤
           // 撤销上一笔 tap (如果是 draw 留下来的点)
           if (lt.stroke) {
-            this.board.strokes = this.board.strokes.filter((x) => x !== lt.stroke);
+            this.board.store.removeByRef(lt.stroke);
             this.board.requestRender();
             if (lt.stroke.id != null) deleteStrokes([lt.stroke.id]).catch(() => {});
-            const ui = this.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke!));
-            if (ui >= 0) { this.undoStack.splice(ui, 1); this._emitHistChange(); }
+            const ui = this.history.undoStack.findIndex((ent) => ent.type === "add" && ent.strokes.includes(lt.stroke!));
+            if (ui >= 0) { this.history.undoStack.splice(ui, 1); this.history.emit(); }
           }
           this._lastTap = null;
           window.dispatchEvent(new CustomEvent("sp:doubletap"));
@@ -558,7 +558,7 @@ export class InputController {
         if (s) {
           if (isTap && this._lastTap) this._lastTap.stroke = s;
           addStroke(s).then(() => {
-            this._pushUndo({ type: "add", strokes: [s] });
+            this.history.record({ type: "add", strokes: [s] });
             this.onChange();
           }).catch((err) => {
             console.error("addStroke failed", err);
@@ -736,7 +736,7 @@ export class InputController {
     this.eraseSession = null;
     if (!sess.strokes.length) return;
     deleteStrokes([...sess.ids]).then(() => {
-      this._pushUndo({ type: "erase", strokes: sess.strokes });
+      this.history.record({ type: "erase", strokes: sess.strokes });
       this.onChange();
     }).catch((err) => {
       console.error("deleteStrokes failed", err);
@@ -773,7 +773,7 @@ export class InputController {
       return;
     }
     for (const s of strokes) putStrokeWithId(s).catch((err) => console.error("move save failed", err));
-    this._pushUndo({ type: "move", strokes, dx, dy });
+    this.history.record({ type: "move", strokes, dx, dy });
     this.onChange();
   }
   // 删除选区 (键盘 Delete / chip)。复用 erase 撤销类型：undo 会原样插回、文字浮层自动对账。
@@ -784,7 +784,7 @@ export class InputController {
     this.board.clearSelection();
     this.board.removeStrokesByIds(ids);
     deleteStrokes(ids).then(() => {
-      this._pushUndo({ type: "erase", strokes });
+      this.history.record({ type: "erase", strokes });
       this.onChange();
       this.status(`已删除 ${strokes.length} 项`);
     }).catch((err) => {
@@ -864,17 +864,11 @@ export class InputController {
   _emitGridCycle(): void { window.dispatchEvent(new CustomEvent("sp:gridcycle")); }
 
   // ---- undo/redo ----
-  _pushUndo(entry: UndoEntry): void {
-    this.undoStack.push(entry);
-    if (this.undoStack.length > 100) this.undoStack.shift();
-    this.redoStack.length = 0;
-    this._emitHistChange();
-  }
-  canUndo(): boolean { return this.undoStack.length > 0; }
-  canRedo(): boolean { return this.redoStack.length > 0; }
+  canUndo(): boolean { return this.history.canUndo(); }
+  canRedo(): boolean { return this.history.canRedo(); }
 
   async undo(): Promise<void> {
-    const e = this.undoStack.pop();
+    const e = this.history.takeUndo();
     if (!e) return;
     if (e.type === "add") {
       const ids = e.strokes.map((s) => s.id).filter((x): x is number => x != null);
@@ -884,24 +878,23 @@ export class InputController {
       // 重新插入（用原 id）
       for (const s of e.strokes) {
         await putStrokeWithId(s).catch(() => {});
-        this.board.strokes.push(s);
+        this.board.store.add(s);
       }
       this.board.requestRender();
     } else if (e.type === "move") {
       this.board.translateStrokes(e.strokes, -e.dx, -e.dy);
       for (const s of e.strokes) putStrokeWithId(s).catch(() => {});
     }
-    this.redoStack.push(e);
-    this._emitHistChange();
+    this.history.restoreRedo(e);
     this.onChange();
   }
   async redo(): Promise<void> {
-    const e = this.redoStack.pop();
+    const e = this.history.takeRedo();
     if (!e) return;
     if (e.type === "add") {
       for (const s of e.strokes) {
         await putStrokeWithId(s).catch(() => {});
-        this.board.strokes.push(s);
+        this.board.store.add(s);
       }
       this.board.requestRender();
     } else if (e.type === "erase") {
@@ -912,20 +905,17 @@ export class InputController {
       this.board.translateStrokes(e.strokes, e.dx, e.dy);
       for (const s of e.strokes) putStrokeWithId(s).catch(() => {});
     }
-    this.undoStack.push(e);
-    this._emitHistChange();
+    this.history.restoreUndo(e);
     this.onChange();
   }
 
   clearHistory(): void {
-    this.undoStack.length = 0;
-    this.redoStack.length = 0;
-    this._emitHistChange();
+    this.history.clear();
   }
 
   _emitHistChange(): void {
     window.dispatchEvent(new CustomEvent("sp:histchange", {
-      detail: { canUndo: this.canUndo(), canRedo: this.canRedo() },
+      detail: { canUndo: this.history.canUndo(), canRedo: this.history.canRedo() },
     }));
   }
 }

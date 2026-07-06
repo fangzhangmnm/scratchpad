@@ -156,18 +156,19 @@ async function renderOffscreen(
   opts: { width: number; height: number; tx: number; ty: number; scale: number },
 ): Promise<void> {
   const { width, height, tx, ty, scale } = opts;
+  const colors = board.getThemeColors();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = board._bgColor;
+  ctx.fillStyle = colors.bg;
   ctx.fillRect(0, 0, width, height);
   const viewport = { tx, ty, scale };
-  for (const s of board.strokes) {
+  for (const s of board.store.all) {
     if (s.type === "text") continue;   // 先画手写笔画，文字 / LaTeX 块最后叠上
-    drawStroke(ctx, s, viewport, board._inkColor);
+    drawStroke(ctx, s, viewport, colors.ink);
   }
   // 文字块走 html2canvas → 离屏临时 div → 像素 → drawImage 到导出 canvas
-  const textStrokes = board.strokes.filter((s): s is TextStroke => s.type === "text");
+  const textStrokes = board.store.all.filter((s): s is TextStroke => s.type === "text");
   if (textStrokes.length) {
-    const inkColor = board._inkColor;
+    const inkColor = colors.ink;
     await ensureKatex().catch(() => {});
     await ensureHtml2Canvas().catch(() => {});
     // 串行而非并行：html2canvas 内部用临时 iframe，并行会互相干扰
