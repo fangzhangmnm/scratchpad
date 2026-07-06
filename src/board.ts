@@ -348,19 +348,24 @@ export class Board {
     const ctx = this.ctx;
     const { tx, ty, scale } = this.viewport;
 
-    if (this.selection.length) {
+    // 单个并集 AABB 框 (不是每 stroke 一个)。这个框就是移动命中区——input 的 sel-move
+    // 判定用的正是 selectionBBox()，所以画框 = 把"能抓哪儿拖"如实画出来 (命中区不变)。
+    const bb = this.selectionBBox();
+    if (bb) {
+      const pad = 5;   // 屏幕 px：框比内容略大一圈，好看清
+      const x = bb.x0 * scale + tx - pad;
+      const y = bb.y0 * scale + ty - pad;
+      const w = (bb.x1 - bb.x0) * scale + pad * 2;
+      const h = (bb.y1 - bb.y0) * scale + pad * 2;
       ctx.save();
+      ctx.fillStyle = this._selColor;
+      ctx.globalAlpha = 0.06;             // 极淡填充：让它读作一块可抓的区域
+      ctx.fillRect(x, y, w, h);
+      ctx.globalAlpha = 1;
       ctx.strokeStyle = this._selColor;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([5, 4]);
-      const pad = 4;   // 屏幕 px：框比内容略大一圈，好看清
-      for (const s of this.selection) {
-        const x = s.bbox[0] * scale + tx - pad;
-        const y = s.bbox[1] * scale + ty - pad;
-        const w = (s.bbox[2] - s.bbox[0]) * scale + pad * 2;
-        const h = (s.bbox[3] - s.bbox[1]) * scale + pad * 2;
-        ctx.strokeRect(x, y, w, h);
-      }
+      ctx.strokeRect(x, y, w, h);
       ctx.restore();
     }
 
