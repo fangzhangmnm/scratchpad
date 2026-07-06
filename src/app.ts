@@ -45,9 +45,6 @@ const els = {
   textOverlayInner: document.getElementById("textOverlayInner") as HTMLElement,
   textEditorWrap: document.getElementById("textEditorWrap") as HTMLElement,
   textEditor: document.getElementById("textEditor") as HTMLTextAreaElement,
-  selActions: document.getElementById("selActions") as HTMLElement,
-  selDelete: document.getElementById("selDelete") as HTMLElement,
-  selDone: document.getElementById("selDone") as HTMLElement,
 };
 
 function safeLS(key: string, fallback: string | null = null): string | null {
@@ -337,7 +334,6 @@ board.addRenderListener(() => {
   textManager.updateOverlayTransform();
   textManager.syncOverlay();
   updateZoomLabel();
-  positionSelChip();          // 选区 chip 跟随 pan/zoom/move
 });
 
 // Input controller
@@ -353,26 +349,10 @@ const input = new InputController(board, {
   status: setStatus,
 });
 
-// ---- 套索选区：board (几何/渲染) ↔ app (chip DOM / 文字浮层) 的挂接 ----
-// board 不认识 textManager / DOM；靠这两个回调回调 app 层。
+// ---- 套索选区：board (几何/渲染) ↔ app (文字浮层) 的挂接 ----
+// board 不认识 textManager / DOM；靠这个回调回调 app 层。
+// 选区无浮动操作条 —— commit 走「画新套索 / 切工具」自动收口 (删除走键盘 Delete)。
 board.onStrokesMoved = () => textManager.refreshPositions();   // 移动后文字 DOM 跟上
-board.onSelectionChange = () => positionSelChip();
-
-// 选区浮动操作条：定位在选区上方居中 (顶部没空间就翻到下方)。空选区 / 非套索工具 → 藏。
-function positionSelChip(): void {
-  const bb = (state.tool === "select") ? board.selectionBBox() : null;
-  if (!bb) { els.selActions.classList.add("hidden"); return; }
-  const tl = board.worldToScreen(bb.x0, bb.y0);
-  const br = board.worldToScreen(bb.x1, bb.y1);
-  const cx = (tl.x + br.x) / 2;
-  let top = tl.y - 44;
-  if (top < 52) top = br.y + 8;                 // 选区顶部贴到顶栏 → chip 放下方
-  els.selActions.style.left = cx + "px";
-  els.selActions.style.top = top + "px";
-  els.selActions.classList.remove("hidden");
-}
-els.selDelete.addEventListener("click", () => input.deleteSelection());
-els.selDone.addEventListener("click", () => board.clearSelection());
 
 // 全局移动端护栏：防系统抢手势 + 防长按弹奇怪对话框 + 切后台清在途指针
 installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });
