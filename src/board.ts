@@ -224,6 +224,16 @@ export class Board {
 
   removeStrokesByIds(ids: number[]): void {
     this.store.removeByIds(ids);
+    // 被删的 stroke 不能留在选区里：否则撤销「复制」后残留幽灵选框 + 子命令排对着已删对象操作。
+    // (删除走这条唯一 choke point：deleteSelection / undo-add / redo-erase 都经此。)
+    if (this.selection.length) {
+      const set = new Set(ids);
+      const kept = this.selection.filter((s) => s.id == null || !set.has(s.id));
+      if (kept.length !== this.selection.length) {
+        this.selection = kept;
+        if (this.onSelectionChange) this.onSelectionChange();
+      }
+    }
   }
 
   // ---- 选区 (套索) —— 几何深模块 ----
