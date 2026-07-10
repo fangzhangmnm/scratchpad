@@ -45,7 +45,17 @@ const els = {
   textOverlayInner: document.getElementById("textOverlayInner") as HTMLElement,
   textEditorWrap: document.getElementById("textEditorWrap") as HTMLElement,
   textEditor: document.getElementById("textEditor") as HTMLTextAreaElement,
+  selBar: document.getElementById("selBar") as HTMLElement,
+  selCopy: document.getElementById("selCopy") as HTMLElement,
+  selDelete: document.getElementById("selDelete") as HTMLElement,
+  selDone: document.getElementById("selDone") as HTMLElement,
 };
+
+// 套索子命令排：仅「选择」工具且有选区时浮出 (顶栏下方 pill)。
+function refreshSelBar(): void {
+  const show = state.tool === "select" && board.selection.length > 0;
+  els.selBar.classList.toggle("hidden", !show);
+}
 
 function safeLS(key: string, fallback: string | null = null): string | null {
   try { return localStorage.getItem(key); } catch { return fallback; }
@@ -110,10 +120,11 @@ function setTool(t: ToolName): void {
   state.tool = t;
   for (const b of els.toolBtns) b.setAttribute("aria-pressed", b.dataset.tool === t ? "true" : "false");
   document.body.dataset.tool = t;
-  // 切离套索 → 弃选区 (高亮/chip 不残留到别的工具)
+  // 切离套索 → 弃选区 (高亮/子命令排不残留到别的工具)
   if (t !== "select") board.clearSelection();
   // 切到文字 → 后台懒加载 KaTeX (空载也安全)
   if (t === "text") ensureKatex().catch((err) => { console.error(err); setStatus("KaTeX 加载失败"); });
+  refreshSelBar();
 }
 for (const b of els.toolBtns) {
   b.addEventListener("click", () => setTool(b.dataset.tool as ToolName));
@@ -349,10 +360,15 @@ const input = new InputController(board, {
   status: setStatus,
 });
 
-// ---- 套索选区：board (几何/渲染) ↔ app (文字浮层) 的挂接 ----
-// board 不认识 textManager / DOM；靠这个回调回调 app 层。
-// 选区无浮动操作条 —— commit 走「画新套索 / 切工具」自动收口 (删除走键盘 Delete)。
+// ---- 套索选区：board (几何/渲染) ↔ app (文字浮层 / 子命令排) 的挂接 ----
+// board 不认识 textManager / DOM / selBar；靠这两个回调回调 app 层。
+// 移动 commit 走松手 _commitMove 落库；子命令排提供 复制 / 删除 / 完成 (iPad 无键盘的删除入口)。
 board.onStrokesMoved = () => textManager.refreshPositions();   // 移动后文字 DOM 跟上
+board.onSelectionChange = () => refreshSelBar();               // 选区增删 → 子命令排显隐
+
+els.selCopy.addEventListener("click", () => input.duplicateSelection());
+els.selDelete.addEventListener("click", () => input.deleteSelection());
+els.selDone.addEventListener("click", () => board.clearSelection());
 
 // 全局移动端护栏：防系统抢手势 + 防长按弹奇怪对话框 + 切后台清在途指针
 installPlatformGuards({ onLostPointers: () => input.cancelAllPointers() });

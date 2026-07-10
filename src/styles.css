@@ -250,6 +250,54 @@ body[data-tool="text"] .text-stroke:hover {
   margin: 0 4px;
 }
 
+/* 套索子命令排：顶栏正下方浮出的 pill，仅「选择」工具且有选区时显示 (抄 WebPaint lasso-toolbar 范式) */
+.sel-bar {
+  position: fixed;
+  top: calc(max(env(safe-area-inset-top, 0px), 8px) + 52px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  z-index: 9;                 /* 略低于顶栏(10)；它在顶栏下方不重叠，够用 */
+}
+.sel-bar.hidden { display: none; }
+
+.sel-cmd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+}
+.sel-cmd:hover { background: var(--bg-soft); }
+.sel-cmd:active { background: var(--line); }
+.sel-cmd svg { width: 20px; height: 20px; }
+.sel-cmd.danger { color: var(--danger); }
+.sel-cmd.danger:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+
+.sel-bar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+  margin: 0 2px;
+}
+
 /* HUD 右下角 */
 .hud {
   position: fixed;
@@ -452,6 +500,8 @@ body[data-tool="text"] .text-stroke:hover {
   .top-bar { gap: 2px; padding: 4px 6px; }
   .tool { width: 32px; height: 32px; }
   .tool svg { width: 18px; height: 18px; }
+  .sel-cmd { width: 32px; height: 32px; }
+  .sel-cmd svg { width: 18px; height: 18px; }
   .swatch { width: 20px; height: 20px; }
   #widthSlider { width: 60px; }
 }

@@ -793,6 +793,27 @@ export class InputController {
     });
   }
 
+  // 复制选区 (子命令排「复制」)。克隆选中 stroke (剥 id) → 偏移一点 → 落库分配新 id → 选中副本。
+  // 偏移让副本一眼看出是复制、且能立刻拖走。复用 add 撤销类型：undo 删副本、redo 重插。
+  duplicateSelection(): void {
+    const src = this.board.selection.slice();
+    if (!src.length) return;
+    const off = 24 / this.board.viewport.scale;   // 固定 ~24 屏幕 px 偏移 (与缩放无关)
+    const clones = src.map((s) => cloneStrokeOffset(s, off, off));
+    // 先进 store：手写副本立即上屏；文字副本要等 id 落定后再刷一帧，syncOverlay 才补 DOM 浮层。
+    for (const c of clones) this.board.store.add(c);
+    this.board.setSelection(clones);
+    Promise.all(clones.map((c) => addStroke(c))).then(() => {
+      this.board.requestRender();                 // 文字副本此刻才有 id → 下一帧 syncOverlay 补浮层
+      this.history.record({ type: "add", strokes: clones });
+      this.onChange();
+      this.status(`已复制 ${clones.length} 项`);
+    }).catch((err) => {
+      console.error("duplicateSelection failed", err);
+      this.status("复制失败");
+    });
+  }
+
   // ---- wheel ----
   // wheel 的 deltaY 跨设备语义不统一：
   //   trackpad pinch (macOS / 触控板)   → ctrlKey=true, deltaMode=0, |deltaY| 通常 1-20，每秒几十个 event
@@ -946,4 +967,22 @@ function effectivePressureFor(rec: PointerRec, e: PointerEvent, enabled: boolean
   if (rec.smP == null || rec.smP < 0) rec.smP = raw;
   else rec.smP += PRESSURE_SMOOTH_ALPHA * (raw - rec.smP);
   return rec.smP;
+}
+
+// 深克隆一条 stroke 并整体偏移 (dx,dy 世界坐标)。返回不带 id 的新对象 (IDB 自增分配)。
+// 手写：拷 points (Float32Array，stride 3 = x,y,pressure)，只挪 x/y；文字：拷字段 + 挪 x/y。
+function cloneStrokeOffset(s: Stroke, dx: number, dy: number): Stroke {
+  const bb: [number, number, number, number] =
+    [s.bbox[0] + dx, s.bbox[1] + dy, s.bbox[2] + dx, s.bbox[3] + dy];
+  if (s.type === "text") {
+    return { type: "text", x: s.x + dx, y: s.y + dy, source: s.source, color: s.color, width: s.width, bbox: bb };
+  }
+  const src = s.points;
+  const pts = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i += 3) {
+    pts[i] = src[i] + dx;
+    pts[i + 1] = src[i + 1] + dy;
+    pts[i + 2] = src[i + 2];
+  }
+  return { color: s.color, width: s.width, points: pts, bbox: bb };
 }

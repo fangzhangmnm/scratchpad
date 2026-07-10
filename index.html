@@ -147,6 +147,35 @@
       </button>
     </header>
 
+    <!-- 套索子命令排：顶栏正下方，仅在「选择」工具且有选区时浮出 (抄 WebPaint lasso-toolbar) -->
+    <div class="sel-bar hidden" id="selBar" role="toolbar" aria-label="选区操作">
+      <button class="sel-cmd" id="selCopy" type="button" title="复制选区">
+        <!-- 图标取自 SVG Icons 库 (id=copy) -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 2 h5 l4 4 v10 a1 1 0 0 1 -1 1 h-8 a1 1 0 0 1 -1 -1 V3 a1 1 0 0 1 1 -1 z"></path>
+          <path d="M14 2 v4 h4"></path>
+          <path d="M6 6 H5 a1 1 0 0 0 -1 1 v13 a1 1 0 0 0 1 1 h8 a1 1 0 0 0 1 -1 v-1"></path>
+        </svg>
+      </button>
+      <button class="sel-cmd danger" id="selDelete" type="button" title="删除选区">
+        <!-- 图标取自 SVG Icons 库 (id=trash-can) -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+          <path d="M10 9.5v9"></path>
+          <path d="M14 9.5v9"></path>
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+        </svg>
+      </button>
+      <span class="sel-bar-sep" aria-hidden="true"></span>
+      <button class="sel-cmd" id="selDone" type="button" title="完成 (取消选区)">
+        <!-- 图标取自 SVG Icons 库 (id=check) -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 12.5 L9.5 17.5 L19.5 6.5"></path>
+        </svg>
+      </button>
+    </div>
+
     <!-- ☰ 菜单：网格 / 回到原点 / 导出 / 主题 / 强制更新 -->
     <div class="menu-panel hidden" id="appMenu" role="menu" aria-label="菜单">
       <div class="menu-info" id="menuVersion">v?</div>
@@ -198,6 +227,6 @@
     <!-- version.js 必须早于 bundle 加载 (classic script，给 window.SCRATCHPAD_VERSION 水印) -->
     <script src="./src/version.js"></script>
     <!-- Built by scripts/build.sh → ./dist/scratchpad-<hash>.mjs (content-hashed，SW 按此名失效缓存) -->
-    <script type="module" src="./dist/scratchpad-587341c0fadb.mjs"></script>
+    <script type="module" src="./dist/scratchpad-8d053f0cbd78.mjs"></script>
   </body>
 </html>
