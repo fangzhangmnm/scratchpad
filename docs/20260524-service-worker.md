@@ -212,7 +212,7 @@ need to fully kill the PWA to pick it up. Defer features into modules
 to dodge this.
 
 Original WebPaint write-up:
-`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/docs/20260527-ipad-coalesced-events.md`
+`/mnt/d/JupyterLocal/20260524 WebPaint/WebPaint/ai-docs/20260527-ipad-coalesced-events.md`
 (section 3).
 
 ## What I'd do differently next time
