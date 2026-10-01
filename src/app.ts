@@ -306,19 +306,23 @@ els.menuSingleFinger.addEventListener("click", () => {
 });
 applySingleFingerDraw(state.singleFingerDraw);
 
-// 强制更新：注销所有 SW + 清空 Cache Storage 后硬重载 (抄 WebPaint menuForcePwaReset)。
+// 强制更新：注销管着当前页面的那个 SW + 清自己前缀（scratchpad-）的缓存后硬重载 (抄 WebPaint menuForcePwaReset)。
 // 只清缓存/SW，不动 IndexedDB → 你的画不会丢。藏在菜单里，误触风险低，故不加二次确认。
+// 只动自己的（家族 CLAUDE.md「共享模型库 · 命名与共享规矩」第 2 条；user 2026-10-01「四个项目清缓存修一下」；edited by Claude Fable 5.1 2026-10-01）：
+//   家族的 app 几乎都挂在同一个域名下，缓存和 service worker 是按域名算的——「全部注销 / 全部删除」会把兄弟 app 的离线壳、
+//   家族共享的模型缓存 pwa-models 一起清掉。前缀 = service-worker.js 的壳缓存名 scratchpad-<hash> / scratchpad-boot。
+const SHELL_CACHE_PREFIX = "scratchpad-";
 els.menuForceUpdate.addEventListener("click", async () => {
   closeMenu();
   setStatus("清缓存重启中…", true);
   try {
     if (navigator.serviceWorker) {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      for (const r of regs) await r.unregister().catch(() => {});
+      const r = await navigator.serviceWorker.getRegistration();
+      if (r) await r.unregister().catch(() => {});
     }
     if (typeof caches !== "undefined") {
       const keys = await caches.keys();
-      for (const k of keys) await caches.delete(k).catch(() => {});
+      for (const k of keys) { if (k.startsWith(SHELL_CACHE_PREFIX)) await caches.delete(k).catch(() => {}); }
     }
     setTimeout(() => location.reload(), 200);
   } catch (e) {
